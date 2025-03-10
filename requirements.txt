@@ -1,0 +1,9 @@
+openai
+python-dotenv
+SpeechRecognition
+numpy
+openai-whisper
+pyaudio
+playsound
+soundfile
+kokoro
