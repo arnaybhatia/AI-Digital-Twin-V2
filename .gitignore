@@ -3,6 +3,7 @@
 /__pycache__
 .DS_Store
 /temp_audio
+/training_audio
 
 
 # Byte-compiled / optimized / DLL files
