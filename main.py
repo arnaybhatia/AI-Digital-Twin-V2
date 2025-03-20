@@ -27,7 +27,6 @@ def handle_exit(signum, frame):
     sys.exit(0)
 
 def startup_message():
-    """Display startup message and instructions"""
     print("\n" + "="*50)
     print("       AI DIGITAL TWIN - VERSION 2.0       ")
     print("="*50)
