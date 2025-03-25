@@ -6,6 +6,8 @@ WORKDIR /app/kdtalker
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
+    python3-full \
     ffmpeg \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -13,13 +15,18 @@ RUN apt-get update && apt-get install -y \
 # Clone KDTalker repo
 RUN git clone https://github.com/chaolongy/KDTalker.git .
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu128
-RUN pip3 install --no-cache-dir -r requirements.txt
-RUN pip3 install --no-cache-dir huggingface_hub
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies inside the virtual environment
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu128 && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir huggingface_hub
 
 # Download weights from Hugging Face
-RUN python3 -c "from huggingface_hub import hf_hub_download; \
+RUN python -c "from huggingface_hub import hf_hub_download; \
     import os; \
     os.makedirs('./ckpts', exist_ok=True); \
     os.makedirs('./pretrained_weights', exist_ok=True); \
@@ -35,5 +42,8 @@ RUN python3 -c "from huggingface_hub import hf_hub_download; \
     for f in files: \
         hf_hub_download(repo_id='ChaolongYang/KDTalker', filename=f, local_dir='./')"
 
+# Set entrypoint to use the virtual environment
+ENTRYPOINT ["/opt/venv/bin/python3"]
+
 # Command to run inference
-CMD ["python3", "inference.py", "--source_image", "/data/source_image.png", "--driven_audio", "/data/input.wav", "--output", "/data/output.mp4"]
+CMD ["inference.py", "--source_image", "/data/source_image.png", "--driven_audio", "/data/input.wav", "--output", "/data/output.mp4"]

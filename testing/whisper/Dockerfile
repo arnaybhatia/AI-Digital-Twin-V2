@@ -6,11 +6,18 @@ WORKDIR /app/whisper
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
+    python3-full \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Whisper
-RUN pip3 install --no-cache-dir git+https://github.com/openai/whisper.git
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Whisper inside the virtual environment
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir git+https://github.com/openai/whisper.git
 
 # Create whisper_transcribe.py
 RUN echo 'import argparse\n\
@@ -29,5 +36,8 @@ if __name__ == "__main__":\n\
     args = parser.parse_args()\n\
     transcribe(args.file, args.output)' > whisper_transcribe.py
 
+# Set entrypoint to use the virtual environment
+ENTRYPOINT ["/opt/venv/bin/python3"]
+
 # Command to transcribe audio
-CMD ["python3", "whisper_transcribe.py", "--file", "/data/input.wav", "--output", "/data/transcript.txt"]
+CMD ["whisper_transcribe.py", "--file", "/data/input.wav", "--output", "/data/transcript.txt"]

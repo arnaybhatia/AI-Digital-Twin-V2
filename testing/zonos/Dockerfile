@@ -6,6 +6,8 @@ WORKDIR /app/zonos
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
+    python3-venv \
+    python3-full \
     espeak-ng \
     git \
     && rm -rf /var/lib/apt/lists/*
@@ -13,13 +15,18 @@ RUN apt-get update && apt-get install -y \
 # Clone Zonos repo
 RUN git clone https://github.com/Zyphra/Zonos.git .
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir torch torchaudio
-RUN pip3 install --no-cache-dir -r requirements.txt
-RUN pip3 install --no-cache-dir huggingface_hub
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python dependencies inside the virtual environment
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchaudio && \
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir huggingface_hub
 
 # Download weights from Hugging Face
-RUN python3 -c "from huggingface_hub import hf_hub_download; \
+RUN python -c "from huggingface_hub import hf_hub_download; \
     import os; \
     os.makedirs('./checkpoints', exist_ok=True); \
     hf_hub_download(repo_id='Zyphra/Zonos-v0.1-transformer', filename='model.pth', local_dir='./checkpoints')"
@@ -50,5 +57,8 @@ if __name__ == "__main__":\n\
     args = parser.parse_args()\n\
     generate_audio(args.text, args.output, args.speaker_audio)' > zonos_generate.py
 
+# Set entrypoint to use the virtual environment
+ENTRYPOINT ["/opt/venv/bin/python3"]
+
 # Command to generate audio
-CMD ["python3", "zonos_generate.py", "--text", "Hello, this is your AI twin.", "--output", "/data/synthesized.wav", "--speaker_audio", "/data/speaker.wav"]
+CMD ["zonos_generate.py", "--text", "Hello, this is your AI twin.", "--output", "/data/synthesized.wav", "--speaker_audio", "/data/speaker.wav"]
