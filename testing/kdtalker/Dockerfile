@@ -2,9 +2,9 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 WORKDIR /app/kdtalker
 
-# Install system dependencies
+# Install system dependencies - using python3 instead of python3.9 for compatibility
 RUN apt-get update && apt-get install -y \
-    python3.9 \
+    python3 \
     python3-pip \
     ffmpeg \
     git \
