@@ -21,7 +21,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies inside the virtual environment
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchaudio && \
+    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126 && \
     pip install --no-cache-dir -r requirements.txt && \
     pip install --no-cache-dir huggingface_hub
 
