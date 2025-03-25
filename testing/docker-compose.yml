@@ -1,0 +1,49 @@
+version: '3.8'
+services:
+  kdtalker:
+    build: ./kdtalker
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  zonos:
+    build: ./zonos
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  whisper:
+    build: ./whisper
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  custom:
+    build: ./custom
+    volumes:
+      - ./data:/data
+    depends_on:
+      - kdtalker
+      - zonos
+      - whisper
+
+volumes:
+  data:

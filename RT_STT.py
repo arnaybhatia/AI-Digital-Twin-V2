@@ -15,17 +15,20 @@ import time
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 class VoiceAssistant:
-    def __init__(self):
+    def __init__(self, interrupt_event=None, process_tts_with_avatar=None):
         self.model = whisper.load_model("tiny")
         self.tts = TextToSpeech()
-        self.interrupt_event = threading.Event()
+        # Use the provided interrupt event or create one
+        self.interrupt_event = interrupt_event if interrupt_event else threading.Event()
+        # Function to process TTS and avatar together
+        self.process_tts_with_avatar = process_tts_with_avatar
         self.audio_queue = Queue()
         self.processing_queue = Queue()
         self.is_speaking = threading.Event()
 
     def listen_continuously(self, source, recognizer):
         """Thread function to continuously listen for audio"""
-        while True:
+        while not self.interrupt_event.is_set():
             try:
                 audio = recognizer.listen(source, timeout=1, phrase_time_limit=None)
                 self.audio_queue.put(audio)
@@ -36,7 +39,7 @@ class VoiceAssistant:
 
     def process_audio_continuously(self):
         """Thread function to process audio and check for triggers"""
-        while True:
+        while not self.interrupt_event.is_set():
             try:
                 try:
                     audio = self.audio_queue.get(timeout=1)
@@ -101,7 +104,12 @@ class VoiceAssistant:
                     response = get_response(query, self.interrupt_event)
                     if not self.interrupt_event.is_set():
                         print("Jim:", response)
-                        self.tts.speak(response, self.interrupt_event)
+                        # Use the combined TTS and avatar generator if available
+                        if self.process_tts_with_avatar:
+                            self.process_tts_with_avatar(response)
+                        else:
+                            # Fall back to just TTS if avatar generator isn't available
+                            self.tts.speak(response, self.interrupt_event)
                 finally:
                     self.is_speaking.clear()
 
@@ -112,9 +120,13 @@ class VoiceAssistant:
             print(f"Error handling query: {e}")
             self.is_speaking.clear()
 
-def start_listening(stt_queue=None):
+def start_listening(interrupt_event=None, process_tts_with_avatar=None):
     try:
-        assistant = VoiceAssistant()
+        assistant = VoiceAssistant(
+            interrupt_event=interrupt_event, 
+            process_tts_with_avatar=process_tts_with_avatar
+        )
+
         r = sr.Recognizer()
         r.dynamic_energy_threshold = True
         r.pause_threshold = 2.0
@@ -143,7 +155,11 @@ def start_listening(stt_queue=None):
 
             print("\nReady to listen! Say 'Hey Jim' or 'Hello Jim' to start...")
 
-            # Keep main thread alive and handle keyboard interrupt
+            # If called from main.py, let it handle the main loop
+            if __name__ != "__main__":
+                return
+
+            # Keep main thread alive and handle keyboard interrupt if run directly
             try:
                 while True:
                     time.sleep(0.1)
