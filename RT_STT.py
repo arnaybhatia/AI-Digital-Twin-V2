@@ -1,6 +1,7 @@
 import speech_recognition as sr
 import whisper
 import numpy as np
+import torch
 import wave
 import os
 from datetime import datetime
@@ -16,7 +17,10 @@ warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using F
 
 class VoiceAssistant:
     def __init__(self, interrupt_event=None, process_tts_with_avatar=None):
-        self.model = whisper.load_model("tiny")
+        # Use GPU if available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using {device} device for Whisper")
+        self.model = whisper.load_model("tiny", device=device)
         self.tts = TextToSpeech()
         # Use the provided interrupt event or create one
         self.interrupt_event = interrupt_event if interrupt_event else threading.Event()

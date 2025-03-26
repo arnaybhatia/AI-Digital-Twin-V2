@@ -19,13 +19,18 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Install Whisper inside the virtual environment
 RUN pip install --no-cache-dir --upgrade pip
 RUN pip install --no-cache-dir git+https://github.com/openai/whisper.git
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu126
 
 # Create whisper_transcribe.py
 RUN echo 'import argparse\n\
 import whisper\n\
+import torch\n\
 \n\
 def transcribe(file, output):\n\
-    model = whisper.load_model("medium")\n\
+    # Check for GPU availability and use it if available\n\
+    device = "cuda" if torch.cuda.is_available() else "cpu"\n\
+    print(f"Using device: {device}")\n\
+    model = whisper.load_model("medium", device=device)\n\
     result = model.transcribe(file)\n\
     with open(output, "w") as f:\n\
         f.write(result["text"])\n\
