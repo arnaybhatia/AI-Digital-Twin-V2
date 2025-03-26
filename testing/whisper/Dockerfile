@@ -17,8 +17,8 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Whisper inside the virtual environment
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir git+https://github.com/openai/whisper.git
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir git+https://github.com/openai/whisper.git
 
 # Create whisper_transcribe.py
 RUN echo 'import argparse\n\

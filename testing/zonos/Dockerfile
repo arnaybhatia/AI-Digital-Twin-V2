@@ -20,10 +20,10 @@ RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Install Python dependencies inside the virtual environment
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126 && \
-    pip install --no-cache-dir -e . && \
-    pip install --no-cache-dir huggingface_hub
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126
+RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir huggingface_hub
 
 # Download weights from Hugging Face
 RUN python -c "from huggingface_hub import hf_hub_download; \
