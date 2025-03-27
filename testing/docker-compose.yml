@@ -5,6 +5,8 @@ services:
       - ./data:/data
     deploy:
       resources:
+        limits:
+          memory: 8G
         reservations:
           devices:
             - driver: nvidia
@@ -17,6 +19,8 @@ services:
       - ./data:/data
     deploy:
       resources:
+        limits:
+          memory: 6G
         reservations:
           devices:
             - driver: nvidia
@@ -29,6 +33,8 @@ services:
       - ./data:/data
     deploy:
       resources:
+        limits:
+          memory: 4G
         reservations:
           devices:
             - driver: nvidia
