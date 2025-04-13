@@ -26,19 +26,5 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-  whisper:
-    build: ./whisper
-    volumes:
-      - ./data:/data
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
 volumes:
   data:
