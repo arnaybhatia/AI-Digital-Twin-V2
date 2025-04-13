@@ -11,11 +11,11 @@ from zonos.utils import DEFAULT_DEVICE as device
 def generate_speech(text, output_path, speaker_audio=None, model_name="transformer"):
     """Generate speech using Zonos TTS engine with proper voice cloning"""
     print(f"Generating speech for text: '{text}'")
-    
     try:
         # Load the model - use transformer model which generally gives better results
         print(f"Loading Zonos {model_name} model on device: {device}")
         model_path = f"Zyphra/Zonos-v0.1-{model_name}"
+        # Load model - it should use the cache automatically if available
         model = Zonos.from_pretrained(model_path, device=device)
         print("Model loaded successfully")
         

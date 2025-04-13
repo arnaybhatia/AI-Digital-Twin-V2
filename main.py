@@ -1,4 +1,3 @@
-import subprocess
 import requests
 import os
 import sys
@@ -13,6 +12,7 @@ import pyaudio
 import numpy as np
 import argparse
 import traceback
+import subprocess
 import speech_recognition as sr
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
@@ -235,21 +235,128 @@ class DockerBasedDigitalTwin:
         
         # Create voice assistant for real-time transcription
         self.voice_assistant = None
-        
+
+    def generate_speech(self, text: str) -> Optional[str]:
+        """Generate speech using the Zonos Docker container service"""
+        try:
+            output_filename = f"zonos_output_{uuid.uuid4()}.wav"
+            # Host path (uses OS-specific separators)
+            output_path = os.path.join(self.temp_audio_dir, output_filename)
+
+            # Docker path (MUST use forward slashes)
+            docker_output_relative = f"temp_audio/{output_filename}" # Use forward slash
+            docker_output = f"/data/{docker_output_relative}"
+            docker_speaker_audio = f"/data/{os.path.basename(self.speaker_audio)}" # Base name is fine
+
+            # Prepare the Docker Compose command
+            # Note: We use docker compose exec instead of docker run
+            cmd = [
+                "docker", "compose", "exec", "-T", "zonos",
+                "python3", "zonos_generate.py",
+                "--text", text,
+                "--output", docker_output, # Pass the forward-slash path
+                "--speaker_audio", docker_speaker_audio
+            ]
+
+            print(f"Generating speech with Zonos service: '{text}'")
+            print(f"Output will be saved to: {output_path}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print(f"Error running Zonos: {result.stderr}")
+                return None
+
+            # Verify the file was created
+            if os.path.exists(output_path):
+                print(f"Speech generated successfully: {output_path}")
+                return output_path
+            else:
+                print(f"Error: Output file not created at {output_path}")
+                print("Command output:", result.stdout)
+                return None
+
+        except subprocess.CalledProcessError as e:
+             print(f"[Zonos TTS] Docker Error: {e}")
+             print(f"Stderr: {e.stderr}")
+             return None
+        except Exception as e:
+            print(f"[Zonos TTS] Error: {e}")
+            traceback.print_exc()
+            return None
+
+    def generate_avatar_video(self, audio_path: str) -> Optional[str]:
+        """Generate a talking avatar video using the KDTalker Docker container"""
+        try:
+            output_filename = f"kdtalker_output_{uuid.uuid4()}.mp4"
+            output_path = os.path.join(self.temp_video_dir, output_filename)
+
+            # Convert paths for Docker volume mapping
+            # Audio file is in temp_audio_dir, which Docker sees under /data
+            docker_audio = f"/data/temp_audio/{os.path.basename(audio_path)}"
+            docker_output = f"/data/temp_video/{output_filename}"
+            docker_image = f"/data/{os.path.basename(self.source_image)}"
+
+            # Prepare the Docker Compose command
+            # Note: We use docker compose exec instead of docker run
+            cmd = [
+                "docker", "compose", "exec", "-T", "kdtalker",
+                "python3", "inference.py",
+                "--source_image", docker_image,
+                "--driven_audio", docker_audio,
+                "--output", docker_output
+            ]
+
+            print(f"Generating avatar video with KDTalker service")
+            print(f"Using audio file: {audio_path}")
+            print(f"Output will be saved to: {output_path}")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            if result.returncode != 0:
+                print(f"Error running KDTalker: {result.stderr}")
+                return None
+
+            # Verify the file was created
+            if os.path.exists(output_path):
+                print(f"Avatar video generated successfully: {output_path}")
+                return output_path
+            else:
+                print(f"Error: Output file not created at {output_path}")
+                print("Command output:", result.stdout)
+                return None
+
+        except subprocess.CalledProcessError as e:
+             print(f"[KDTalker] Docker Error: {e}")
+             print(f"Stderr: {e.stderr}")
+             return None
+        except Exception as e:
+            print(f"[KDTalker] Error: {e}")
+            traceback.print_exc()
+            return None
+
     def process_tts_with_avatar(self, text):
         """Process text-to-speech and avatar generation"""
         try:
+            print("\n→ Starting speech and avatar generation...")
             # Step 1: Generate speech from text
+            print("Step 1/2: Generating speech audio...")
             audio_path = self.generate_speech(text)
             if not audio_path:
-                print("Failed to generate speech")
+                print("❌ Failed to generate speech audio")
                 return None
+            print(f"✓ Speech audio generated successfully at: {audio_path}")
                 
             # Step 2: Generate avatar video with the audio
+            print("\nStep 2/2: Generating talking avatar video...")
             video_path = self.generate_avatar_video(audio_path)
             if not video_path:
-                print("Failed to generate avatar video")
-                return None
+                print("❌ Failed to generate avatar video")
+                # Even if the video failed, we still have the audio
+                return {
+                    "text": text,
+                    "audio": audio_path,
+                    "video": None
+                }
+            print(f"✓ Avatar video generated successfully at: {video_path}")
                 
             return {
                 "text": text,
@@ -257,10 +364,12 @@ class DockerBasedDigitalTwin:
                 "video": video_path
             }
         except Exception as e:
-            print(f"Error in process_tts_with_avatar: {e}")
+            print(f"❌ Error in process_tts_with_avatar: {e}")
             traceback.print_exc()
             return None
-            
+        finally:
+            print("→ Speech and avatar processing completed")
+
     def start_listening(self):
         """Start listening for audio input using Whisper"""
         print("🎤 Initializing Whisper Voice Assistant...")
@@ -286,8 +395,18 @@ class DockerBasedDigitalTwin:
     def cleanup(self):
         """Clean up temporary files and resources"""
         try:
-            print("Cleaning up resources...")
-            # Any cleanup operations can be added here
+            print("Cleaning up temporary audio/video files...")
+            for directory in [self.temp_audio_dir, self.temp_video_dir]:
+                if os.path.exists(directory):
+                    for filename in os.listdir(directory):
+                        file_path = os.path.join(directory, filename)
+                        try:
+                            if os.path.isfile(file_path):
+                                os.remove(file_path)
+                                # print(f"Removed temp file: {file_path}") # Optional: uncomment for verbose cleanup
+                        except Exception as e:
+                            print(f"Warning: Could not remove temporary file {file_path}: {e}")
+            print("Cleanup complete.")
         except Exception as e:
             print(f"Error during cleanup: {e}")
 

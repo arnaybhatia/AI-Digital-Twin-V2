@@ -16,7 +16,8 @@ services:
   zonos:
     build: ./zonos
     volumes:
-      - ./data:/data
+      - ./data:/data # Existing volume for input/output
+      - zonos_hf_cache:/root/.cache/huggingface/hub # Re-add volume for model cache
     deploy:
       resources:
         limits:
@@ -26,5 +27,7 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
 volumes:
-  data:
+  data: # Existing volume definition
+  zonos_hf_cache: # Re-define the named volume for persistence
