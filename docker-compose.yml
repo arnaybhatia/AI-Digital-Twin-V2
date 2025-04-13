@@ -26,7 +26,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
   whisper:
     build: ./whisper
     volumes:
@@ -40,15 +39,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-
-  custom:
-    build: ./custom
-    volumes:
-      - ./data:/data
-    depends_on:
-      - kdtalker
-      - zonos
-      - whisper
 
 volumes:
   data:

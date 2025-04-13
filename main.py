@@ -7,7 +7,12 @@ import signal
 import time
 import uuid
 import json
-from typing import Optional
+import queue
+import wave
+import pyaudio
+import numpy as np
+import argparse
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 
 # Global event for interrupting processes
@@ -178,6 +183,20 @@ def get_response(user_input: str, interrupt_event: Optional[threading.Event] = N
     
     return "I encountered an unexpected error. Please try again."
 
+def simple_query(query_text):
+    """Simple function to query the API with text and get a response"""
+    # Initialize session if needed
+    if not initialize_session():
+        print("Failed to initialize API session")
+        return None
+    
+    print(f"Sending query: '{query_text}'")
+    
+    # Get response from API
+    response_text = get_response(query_text, interrupt_event)
+    
+    return response_text
+
 class DockerBasedDigitalTwin:
     def __init__(self):
         self.base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -186,6 +205,15 @@ class DockerBasedDigitalTwin:
         self.temp_video_dir = os.path.join(self.data_dir, "temp_video")
         self.source_image = os.path.join(self.data_dir, "source_image.png")
         self.speaker_audio = os.path.join(self.data_dir, "speaker.wav")
+        
+        # Audio recording settings
+        self.format = pyaudio.paInt16
+        self.channels = 1
+        self.rate = 16000  # 16kHz sampling rate
+        self.chunk = 1024  # Record in chunks of 1024 samples
+        self.recording = False
+        self.audio_queue = queue.Queue()
+        self.wake_words = ["hey jim", "hello jim", "hi jim"]
         
         # Create necessary directories
         os.makedirs(self.data_dir, exist_ok=True)
@@ -202,14 +230,144 @@ class DockerBasedDigitalTwin:
         if not os.path.exists(self.speaker_audio):
             print(f"WARNING: Speaker audio not found at {self.speaker_audio}")
     
+    def start_listening(self):
+        """Start listening for audio input and detect wake words"""
+        self.recording = True
+        
+        # Initialize PyAudio
+        self.audio = pyaudio.PyAudio()
+        
+        # Start recording in a separate thread
+        self.listen_thread = threading.Thread(target=self._listen_for_wake_word)
+        self.listen_thread.daemon = True
+        self.listen_thread.start()
+        
+        print("🎤 Listening for wake word... Say 'Hey Jim' to activate")
+        
+    def _listen_for_wake_word(self):
+        """Listen for wake word in the background"""
+        # Open stream
+        stream = self.audio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk
+        )
+        
+        # Buffer for storing audio
+        audio_buffer = []
+        # How many seconds of audio to keep for wake word detection
+        buffer_seconds = 2
+        max_buffer_chunks = int(self.rate / self.chunk * buffer_seconds)
+        
+        print("Listening for 'Hey Jim'...")
+        
+        try:
+            while self.recording:
+                # Read chunk of audio
+                data = stream.read(self.chunk, exception_on_overflow=False)
+                audio_buffer.append(data)
+                
+                # Keep the buffer at a fixed size
+                if len(audio_buffer) > max_buffer_chunks:
+                    audio_buffer.pop(0)
+                
+                # Every half second, check for wake word
+                if len(audio_buffer) % (max_buffer_chunks // 4) == 0:
+                    # Save buffer to a temporary file
+                    temp_filename = os.path.join(self.temp_audio_dir, f"wake_word_check_{uuid.uuid4()}.wav")
+                    with wave.open(temp_filename, 'wb') as wf:
+                        wf.setnchannels(self.channels)
+                        wf.setsampwidth(self.audio.get_sample_size(self.format))
+                        wf.setframerate(self.rate)
+                        wf.writeframes(b''.join(audio_buffer))
+                    
+                    # Check for wake word using Whisper
+                    transcript = self.transcribe_audio(temp_filename)
+                    try:
+                        os.remove(temp_filename)
+                    except:
+                        pass
+                    
+                    if transcript:
+                        transcript = transcript.lower().strip()
+                        print(f"Heard: {transcript}")
+                        
+                        # Check if wake word is in the transcript
+                        if any(wake_word in transcript for wake_word in self.wake_words):
+                            print("🔔 Wake word detected!")
+                            
+                            # Start recording the actual command
+                            self._record_command(stream)
+                            break
+        
+        except Exception as e:
+            print(f"Error in listen thread: {e}")
+        finally:
+            stream.stop_stream()
+            stream.close()
+    
+    def _record_command(self, stream=None):
+        """Record audio command after wake word is detected"""
+        print("🎤 Recording your command... Speak now")
+        
+        # If no stream is provided, start a new one
+        if stream is None:
+            stream = self.audio.open(
+                format=self.format,
+                channels=self.channels,
+                rate=self.rate,
+                input=True,
+                frames_per_buffer=self.chunk
+            )
+            
+        # Record for a few seconds
+        command_frames = []
+        max_command_time = 5  # seconds
+        for _ in range(0, int(self.rate / self.chunk * max_command_time)):
+            data = stream.read(self.chunk, exception_on_overflow=False)
+            command_frames.append(data)
+            
+        print("✅ Finished recording command")
+        
+        # Save command to file
+        command_filename = os.path.join(self.temp_audio_dir, f"command_{uuid.uuid4()}.wav")
+        with wave.open(command_filename, 'wb') as wf:
+            wf.setnchannels(self.channels)
+            wf.setsampwidth(self.audio.get_sample_size(self.format))
+            wf.setframerate(self.rate)
+            wf.writeframes(b''.join(command_frames))
+            
+        print("💾 Command saved to file")
+        
+        # Transcribe the command
+        transcript = self.transcribe_audio(command_filename)
+        if transcript:
+            print(f"🔊 You said: {transcript}")
+            # Process the transcript
+            self.audio_queue.put({
+                "transcript": transcript,
+                "audio_file": command_filename
+            })
+        else:
+            print("❌ Failed to transcribe command")
+            try:
+                os.remove(command_filename)
+            except:
+                pass
+                
     def transcribe_audio(self, input_audio):
-        """Use Whisper container to transcribe audio"""
+        """Use Whisper container to transcribe audio on demand"""
         try:
             # Generate a unique filename for the output
             output_filename = f"transcript_{uuid.uuid4()}.txt"
             output_path = os.path.join(self.data_dir, output_filename)
             
-            # Make sure input audio is within the data directory
+            # Get absolute paths for docker volume mounting
+            abs_data_dir = os.path.abspath(self.data_dir)
+            
+            # Make sure input audio path is relative to the data directory for the container
             if not input_audio.startswith(self.data_dir):
                 rel_path = os.path.relpath(input_audio, os.path.dirname(self.data_dir))
                 docker_input = f"/data/{rel_path}"
@@ -219,8 +377,11 @@ class DockerBasedDigitalTwin:
             
             print(f"Transcribing audio with Whisper...")
             cmd = [
-                "docker", "exec", "testing-whisper-1", 
-                "python", "whisper_transcribe.py", 
+                "docker", "run", "--rm", 
+                "--gpus", "all",
+                "-v", f"{abs_data_dir}:/data",
+                "ai-digital-twin-v2-whisper", 
+                "whisper_transcribe.py", 
                 "--file", docker_input, 
                 "--output", f"/data/{output_filename}"
             ]
@@ -246,15 +407,18 @@ class DockerBasedDigitalTwin:
         except Exception as e:
             print(f"Transcription error: {e}")
             return None
-
+            
     def generate_speech(self, text, speaker_audio=None):
-        """Use Zonos container to generate speech"""
+        """Use Zonos container to generate speech on demand"""
         try:
             # Generate a unique filename for the output
             output_filename = f"zonos_output_{uuid.uuid4()}.wav"
             output_path = os.path.join(self.temp_audio_dir, output_filename)
             
             speaker = speaker_audio or self.speaker_audio
+            
+            # Get absolute path for docker volume mounting
+            abs_data_dir = os.path.abspath(self.data_dir)
             
             # Get relative paths for docker
             speaker_rel_path = os.path.relpath(speaker, self.data_dir)
@@ -265,8 +429,11 @@ class DockerBasedDigitalTwin:
             
             print(f"Generating speech with Zonos: '{text}'")
             cmd = [
-                "docker", "exec", "testing-zonos-1",
-                "python", "zonos_generate.py",
+                "docker", "run", "--rm",
+                "--gpus", "all",
+                "-v", f"{abs_data_dir}:/data",
+                "ai-digital-twin-v2-zonos",
+                "zonos_generate.py",
                 "--text", text,
                 "--output", docker_output,
                 "--speaker_audio", docker_speaker
@@ -286,15 +453,18 @@ class DockerBasedDigitalTwin:
             import traceback
             traceback.print_exc()
             return None
-
+            
     def generate_avatar_video(self, audio_file, image_file=None):
-        """Use KDTalker container to generate a talking avatar video"""
+        """Use KDTalker container to generate a talking avatar video on demand"""
         try:
             # Generate a unique filename for the output
             output_filename = f"kdtalker_output_{uuid.uuid4()}.mp4"
             output_path = os.path.join(self.temp_video_dir, output_filename)
             
             image = image_file or self.source_image
+            
+            # Get absolute path for docker volume mounting
+            abs_data_dir = os.path.abspath(self.data_dir)
             
             # Get relative paths for docker
             audio_rel_path = os.path.relpath(audio_file, self.data_dir)
@@ -308,8 +478,11 @@ class DockerBasedDigitalTwin:
             
             print(f"Generating avatar video with KDTalker")
             cmd = [
-                "docker", "exec", "testing-kdtalker-1",
-                "python", "inference.py",
+                "docker", "run", "--rm",
+                "--gpus", "all",
+                "-v", f"{abs_data_dir}:/data",
+                "ai-digital-twin-v2-kdtalker",
+                "inference.py",
                 "--source_image", docker_image,
                 "--driven_audio", docker_audio,
                 "--output", docker_output
@@ -508,16 +681,159 @@ def interactive_chat():
         except Exception as e:
             print(f"Error in chat: {e}")
 
+def live_voice_chat():
+    """Run a live voice chat session with wake word detection"""
+    global digital_twin
+    
+    # Initialize session with API
+    initialize_session()
+    
+    # Start listening for wake word
+    digital_twin.start_listening()
+    
+    print("📢 AI Digital Twin is now listening. Say 'Hey Jim' to activate.")
+    print("Press Ctrl+C to exit.")
+    
+    try:
+        while not interrupt_event.is_set():
+            try:
+                # Check if there's a command in the queue with a short timeout
+                command_data = digital_twin.audio_queue.get(timeout=0.5)
+                transcript = command_data.get("transcript", "")
+                audio_file = command_data.get("audio_file", "")
+                
+                if transcript:
+                    print(f"📝 Processing command: \"{transcript}\"")
+                    
+                    # Process the command and get a video response
+                    result = digital_twin.process_input_to_video(text_input=transcript)
+                    
+                    if result:
+                        print(f"\nAI: {result['text']}")
+                        print(f"Audio generated: {result['audio']}")
+                        print(f"Video generated: {result['video']}")
+                        
+                    # After processing, start listening for wake word again
+                    digital_twin.start_listening()
+                    
+            except queue.Empty:
+                # No command in queue, continue listening
+                pass
+                
+    except KeyboardInterrupt:
+        print("\nExiting voice chat...")
+    finally:
+        # Stop recording
+        digital_twin.recording = False
+
+def generate_speech_direct(text, speaker_audio_path):
+    """Generate speech directly using docker run, without checking container state"""
+    try:
+        # Generate a unique filename for the output
+        output_filename = f"zonos_output_{uuid.uuid4()}.wav"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        data_dir = os.path.join(base_dir, "data")
+        temp_audio_dir = os.path.join(data_dir, "temp_audio")
+        output_path = os.path.join(temp_audio_dir, output_filename)
+        
+        # Make sure directories exist
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(temp_audio_dir, exist_ok=True)
+        
+        # Get absolute path for docker volume mounting
+        abs_data_dir = os.path.abspath(data_dir)
+        
+        # Get relative paths for docker
+        speaker_rel_path = os.path.relpath(speaker_audio_path, data_dir)
+        docker_speaker = f"/data/{speaker_rel_path}"
+        
+        output_rel_dir = os.path.relpath(temp_audio_dir, data_dir)
+        docker_output = f"/data/{output_rel_dir}/{output_filename}"
+        
+        print(f"Generating speech with Zonos: '{text}'")
+        cmd = [
+            "docker", "run", "--rm",
+            "--gpus", "all",
+            "-v", f"{abs_data_dir}:/data",
+            "ai-digital-twin-v2-zonos",
+            "zonos_generate.py",
+            "--text", text,
+            "--output", docker_output,
+            "--speaker_audio", docker_speaker
+        ]
+        
+        print(f"Running command: {' '.join(cmd)}")
+        subprocess.run(cmd, check=True)
+        
+        if os.path.exists(output_path):
+            return output_path
+        else:
+            print(f"Error: Generated audio file not found at {output_path}")
+            return None
+            
+    except Exception as e:
+        print(f"Speech generation error: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
+
 def main():
     global digital_twin
+    
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='AI Digital Twin')
+    parser.add_argument('--input', type=str, help='Text input to query the AI directly')
+    args = parser.parse_args()
     
     # Set up signal handlers for graceful exit
     signal.signal(signal.SIGINT, handle_exit)
     signal.signal(signal.SIGTERM, handle_exit)
     
     # Load environment variables
-    load_env()
+    try:
+        load_env()
+    except:
+        print("Note: No .env file found. Continuing without API key.")
     
+    # If input is provided, use simple query mode
+    if args.input:
+        # Get response from API
+        response = simple_query(args.input)
+        if response:
+            print("\n" + "="*50)
+            print("RESPONSE:")
+            print(response)
+            print("="*50)
+            
+            # Generate speech directly from the response using docker run
+            print("\nGenerating speech with Zonos...")
+            speaker_audio_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "speaker.wav")
+            
+            # Check if speaker.wav exists, create a placeholder if it doesn't
+            if not os.path.exists(speaker_audio_path):
+                print(f"WARNING: Speaker audio not found at {speaker_audio_path}")
+                print("Creating empty speaker audio file...")
+                os.makedirs(os.path.dirname(speaker_audio_path), exist_ok=True)
+                with open(speaker_audio_path, 'wb') as f:
+                    # Write an empty WAV file header as placeholder
+                    f.write(b'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00')
+            
+            try:
+                audio_path = generate_speech_direct(response, speaker_audio_path)
+                if audio_path:
+                    print(f"Speech generated and saved to: {audio_path}")
+                    print("You can play this file with any audio player.")
+                else:
+                    print("Failed to generate speech. Check docker logs for details.")
+            except Exception as e:
+                print(f"Error generating speech: {e}")
+                import traceback
+                traceback.print_exc()
+        else:
+            print("Error: Failed to get a response from the API")
+        return
+    
+    # Otherwise, proceed with the full digital twin experience
     startup_message()
     
     try:
@@ -537,8 +853,8 @@ def main():
             print("Failed to ensure all containers are running. Exiting...")
             sys.exit(1)
         
-        # Run interactive chat
-        interactive_chat()
+        # Run voice-activated chat
+        live_voice_chat()
         
         # Clean up before exiting
         digital_twin.cleanup()

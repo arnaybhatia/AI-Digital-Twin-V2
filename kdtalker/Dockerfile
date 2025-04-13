@@ -149,8 +149,35 @@ if __name__ == "__main__":\n\
 # Run the download script
 RUN python download.py
 
+# Create a simple script that keeps the container running
+RUN echo 'import time\n\
+import os\n\
+import signal\n\
+import sys\n\
+\n\
+# Function to handle signals properly\n\
+def signal_handler(sig, frame):\n\
+    print("\\nShutting down gracefully...")\n\
+    sys.exit(0)\n\
+\n\
+# Register signal handlers\n\
+signal.signal(signal.SIGTERM, signal_handler)\n\
+signal.signal(signal.SIGINT, signal_handler)\n\
+\n\
+print("KDTalker service is ready and waiting for commands.")\n\
+print("Use docker exec to run animation commands.")\n\
+\n\
+# Keep container running\n\
+while True:\n\
+    try:\n\
+        time.sleep(60)  # Just sleep and keep container running\n\
+    except KeyboardInterrupt:\n\
+        print("\\nShutting down...")\n\
+        break\n\
+' > server.py
+
 # Set entrypoint to use python3.9 from the virtual environment
 ENTRYPOINT ["/opt/venv/bin/python3.9"]
 
-# Command to run inference
-CMD ["inference.py", "--source_image", "/data/source_image.png", "--driven_audio", "/data/input.wav", "--output", "/data/output.mp4"]
+# Command to run the server
+CMD ["server.py"]

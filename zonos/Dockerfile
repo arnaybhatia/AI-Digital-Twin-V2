@@ -1,35 +1,51 @@
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-devel
+RUN pip install uv
+
+# Install necessary system packages including git
+RUN apt update && \
+    apt install -y espeak-ng git && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/zonos
 
-# Install system dependencies - using python3 instead of python3.9 for compatibility
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
-    python3-full \
-    espeak-ng \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# Clone Zonos repo
+# Clone the Zonos repository
 RUN git clone https://github.com/Zyphra/Zonos.git .
 
-# Create and activate virtual environment
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Install Zonos using uv for faster installation
+RUN uv pip install --system -e . && uv pip install --system -e .[compile]
 
-# Install Python dependencies inside the virtual environment
-RUN pip install --no-cache-dir --upgrade pip
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu126
-RUN pip install --no-cache-dir -e .
-RUN pip install --no-cache-dir huggingface_hub
+# Create the generate script
+COPY zonos_generate.py /app/zonos/
 
-# Copy the optimized zonos_generate.py script instead of creating an inline one
-COPY zonos_generate.py .
+# Create a simple script that keeps the container running
+RUN echo 'import time\n\
+import os\n\
+import signal\n\
+import sys\n\
+\n\
+# Function to handle signals properly\n\
+def signal_handler(sig, frame):\n\
+    print("\\nShutting down gracefully...")\n\
+    sys.exit(0)\n\
+\n\
+# Register signal handlers\n\
+signal.signal(signal.SIGTERM, signal_handler)\n\
+signal.signal(signal.SIGINT, signal_handler)\n\
+\n\
+print("Zonos service is ready and waiting for commands.")\n\
+print("Use docker exec to run text-to-speech commands.")\n\
+\n\
+# Keep container running\n\
+while True:\n\
+    try:\n\
+        time.sleep(60)  # Just sleep and keep container running\n\
+    except KeyboardInterrupt:\n\
+        print("\\nShutting down...")\n\
+        break\n\
+' > server.py
 
-# Set entrypoint to use the virtual environment
-ENTRYPOINT ["/opt/venv/bin/python3"]
+# Set the entrypoint to Python
+ENTRYPOINT ["python"]
 
-# Command to generate audio
-CMD ["zonos_generate.py", "--text", "Hello, this is your AI twin.", "--output", "/data/synthesized.wav", "--speaker_audio", "/data/speaker.wav"]
+# Command to run the server
+CMD ["server.py"]

@@ -45,5 +45,46 @@ if __name__ == "__main__":\n\
 # Set entrypoint to use the virtual environment
 ENTRYPOINT ["/opt/venv/bin/python3"]
 
-# Command to transcribe audio
-CMD ["whisper_transcribe.py", "--file", "/data/input.wav", "--output", "/data/transcript.txt"]
+# Create a simple script that keeps the container running and accepts commands
+RUN echo 'import time\n\
+import os\n\
+import signal\n\
+import sys\n\
+import threading\n\
+import subprocess\n\
+import whisper\n\
+import torch\n\
+\n\
+# Function to handle signals properly\n\
+def signal_handler(sig, frame):\n\
+    print("\\nShutting down gracefully...")\n\
+    sys.exit(0)\n\
+\n\
+# Register signal handlers\n\
+signal.signal(signal.SIGTERM, signal_handler)\n\
+signal.signal(signal.SIGINT, signal_handler)\n\
+\n\
+# Pre-load the model to save time during inference\n\
+print("Loading Whisper model...")\n\
+try:\n\
+    device = "cuda" if torch.cuda.is_available() else "cpu"\n\
+    model = whisper.load_model("medium", device=device)\n\
+    print(f"Model loaded successfully on {device}")\n\
+except Exception as e:\n\
+    print(f"Error loading model: {str(e)}")\n\
+    model = None\n\
+\n\
+print("Whisper service is ready and waiting for commands.")\n\
+print("Use docker exec to run transcription commands.")\n\
+\n\
+# Keep container running\n\
+while True:\n\
+    try:\n\
+        time.sleep(60)  # Just sleep and keep container running\n\
+    except KeyboardInterrupt:\n\
+        print("\\nShutting down...")\n\
+        break\n\
+' > server.py
+
+# Command to run the server
+CMD ["server.py"]
