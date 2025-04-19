@@ -2,7 +2,7 @@ services:
   kdtalker:
     build: ./kdtalker
     volumes:
-      - ./data:/data
+      - ./data:/app/kdtalker/data # Mount data directory for input/output
     deploy:
       resources:
         limits:
@@ -12,6 +12,9 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
 
   zonos:
     build: ./zonos

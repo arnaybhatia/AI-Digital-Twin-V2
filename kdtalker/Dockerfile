@@ -21,15 +21,14 @@ RUN apt-get update && \
 # Clone KDTalker repo
 RUN git clone https://github.com/chaolongy/KDTalker.git .
 
-# Create and activate virtual environment using python3.9
+# Create and activate virtual environment
 RUN python3.9 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Install Python dependencies inside the virtual environment
-# Upgrade pip within the venv
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install PyTorch matching README recommendation
+# Install PyTorch with CUDA support
 RUN pip install --no-cache-dir torch==2.3.0 torchvision==0.18.0 torchaudio==2.3.0 --index-url https://download.pytorch.org/whl/cu121
 
 # Install numpy first (needed for many packages)
@@ -83,101 +82,65 @@ RUN pip install --no-cache-dir yacs==0.1.8
 
 # Install cmake before dlib
 RUN apt-get update && apt-get install -y cmake && rm -rf /var/lib/apt/lists/*
+
+# Create directories for models
+RUN mkdir -p pretrained_weights/insightface/models/buffalo_l && \
+    mkdir -p pretrained_weights/liveportrait/base_models && \
+    mkdir -p pretrained_weights/liveportrait/retargeting_models && \
+    mkdir -p ckpts
+
+# Download models from Hugging Face
+COPY download_models.py .
+RUN python3 download_models.py
+
+# Create data directory for mounting
+RUN mkdir -p /data/temp_audio /data/temp_video
+
+# Set environment variables
+ENV PYTHONPATH=/app/kdtalker
+ENV CUDA_VISIBLE_DEVICES=0
+
 RUN pip install --no-cache-dir dlib==19.24.6
+RUN pip install --no-cache-dir huggingface_hub==0.17.3
+RUN pip install --no-cache-dir diffusers==0.17.0
+RUN mv ckpts/KDTalker.pth .
 
-# Install huggingface_hub for model weights
-RUN pip install --no-cache-dir huggingface_hub
-
-# Create proper Python script for downloading the repository snapshot
+# Create a simple server script to keep container running
+COPY inference.py /app/kdtalker/inference.py
 RUN echo 'import os\n\
-import shutil\n\
-import tempfile\n\
-from huggingface_hub import snapshot_download\n\
-\n\
-def download_model_repo():\n\
-    print("Downloading the KDTalker repository from Hugging Face...")\n\
-    temp_dir = tempfile.mkdtemp()\n\
-    try:\n\
-        # Download the complete repository snapshot\n\
-        repo_path = snapshot_download(\n\
-            repo_id="ChaolongYang/KDTalker",\n\
-            local_dir=temp_dir,\n\
-            local_dir_use_symlinks=False\n\
-        )\n\
-        print(f"Repository downloaded to {repo_path}")\n\
-        \n\
-        # Create the necessary directories\n\
-        os.makedirs("./ckpts", exist_ok=True)\n\
-        os.makedirs("./pretrained_weights", exist_ok=True)\n\
-        \n\
-        # List all downloaded files for verification\n\
-        print("\\nDownloaded files:")\n\
-        for root, dirs, files in os.walk(temp_dir):\n\
-            for file in files:\n\
-                path = os.path.join(root, file)\n\
-                rel_path = os.path.relpath(path, temp_dir)\n\
-                print(f" - {rel_path}")\n\
-                \n\
-                # Copy relevant files to the right locations\n\
-                if rel_path.startswith("checkpoints/"):\n\
-                    dst = os.path.join("./ckpts", os.path.basename(rel_path))\n\
-                    print(f"Copying {rel_path} to {dst}")\n\
-                    shutil.copy(path, dst)\n\
-                elif rel_path.startswith("pretrained_weights/"):\n\
-                    dst_dir = os.path.join("./pretrained_weights", os.path.dirname(rel_path.replace("pretrained_weights/", "")))\n\
-                    os.makedirs(dst_dir, exist_ok=True)\n\
-                    dst = os.path.join(dst_dir, os.path.basename(rel_path))\n\
-                    print(f"Copying {rel_path} to {dst}")\n\
-                    shutil.copy(path, dst)\n\
-    finally:\n\
-        # Clean up temp directory\n\
-        shutil.rmtree(temp_dir, ignore_errors=True)\n\
-    \n\
-    # Show the final directory structure\n\
-    print("\\nFinal directory structure:")\n\
-    for root, dirs, files in os.walk("./"):\n\
-        level = root.count(os.sep)\n\
-        indent = " " * 4 * level\n\
-        print(f"{indent}{os.path.basename(root) or root}/")\n\
-        for file in files:\n\
-            if file.endswith(".pth") or file.endswith(".onnx"):\n\
-                print(f"{indent}    {file}")\n\
-\n\
-if __name__ == "__main__":\n\
-    download_model_repo()\n' > download.py
-
-# Run the download script
-RUN python download.py
-
-# Create a simple script that keeps the container running
-RUN echo 'import time\n\
-import os\n\
+import time\n\
 import signal\n\
 import sys\n\
+import subprocess\n\
 \n\
-# Function to handle signals properly\n\
 def signal_handler(sig, frame):\n\
-    print("\\nShutting down gracefully...")\n\
+    print("\\nShutting down...")\n\
     sys.exit(0)\n\
 \n\
-# Register signal handlers\n\
+def run_inference(source_image, driven_audio, output):\n\
+    cmd = ["python3", "inference.py",\n\
+           "-source_image", source_image,\n\
+           "-driven_audio", driven_audio,\n\
+           "-output", output]\n\
+    try:\n\
+        subprocess.run(cmd, check=True)\n\
+        return True\n\
+    except subprocess.CalledProcessError as e:\n\
+        print(f"Error running inference: {e}")\n\
+        if hasattr(e, "stderr"):\n\
+            print(f"Error output: {e.stderr}")\n\
+        return False\n\
+\n\
 signal.signal(signal.SIGTERM, signal_handler)\n\
 signal.signal(signal.SIGINT, signal_handler)\n\
 \n\
-print("KDTalker service is ready and waiting for commands.")\n\
-print("Use docker exec to run animation commands.")\n\
-\n\
-# Keep container running\n\
+print("KDTalker service is ready.")\n\
 while True:\n\
     try:\n\
-        time.sleep(60)  # Just sleep and keep container running\n\
+        time.sleep(1)\n\
     except KeyboardInterrupt:\n\
         print("\\nShutting down...")\n\
-        break\n\
-' > server.py
+        break\n' > server.py
 
-# Set entrypoint to use python3.9 from the virtual environment
-ENTRYPOINT ["/opt/venv/bin/python3.9"]
-
-# Command to run the server
-CMD ["server.py"]
+# Use server.py as the default command
+CMD ["python3", "server.py"]

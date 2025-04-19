@@ -291,25 +291,32 @@ class DockerBasedDigitalTwin:
             output_path = os.path.join(self.temp_video_dir, output_filename)
 
             # Convert paths for Docker volume mapping
-            # Audio file is in temp_audio_dir, which Docker sees under /data
             docker_audio = f"/data/temp_audio/{os.path.basename(audio_path)}"
             docker_output = f"/data/temp_video/{output_filename}"
             docker_image = f"/data/{os.path.basename(self.source_image)}"
 
             # Prepare the Docker Compose command
-            # Note: We use docker compose exec instead of docker run
             cmd = [
                 "docker", "compose", "exec", "-T", "kdtalker",
                 "python3", "inference.py",
-                "--source_image", docker_image,
-                "--driven_audio", docker_audio,
-                "--output", docker_output
+                "-source_image", docker_image,
+                "-driven_audio", docker_audio,
+                "-output", docker_output
             ]
 
             print(f"Generating avatar video with KDTalker service")
             print(f"Using audio file: {audio_path}")
             print(f"Output will be saved to: {output_path}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+
+            # Run with UTF-8 encoding explicitly
+            result = subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                encoding='utf-8',
+                errors='replace'
+            )
 
             if result.returncode != 0:
                 print(f"Error running KDTalker: {result.stderr}")
@@ -322,41 +329,47 @@ class DockerBasedDigitalTwin:
             else:
                 print(f"Error: Output file not created at {output_path}")
                 print("Command output:", result.stdout)
+                print("Error output:", result.stderr)
                 return None
 
         except subprocess.CalledProcessError as e:
              print(f"[KDTalker] Docker Error: {e}")
-             print(f"Stderr: {e.stderr}")
+             if hasattr(e, 'stderr'):
+                 print(f"Stderr: {e.stderr}")
              return None
         except Exception as e:
             print(f"[KDTalker] Error: {e}")
             traceback.print_exc()
             return None
 
-    def process_tts_with_avatar(self, text):
+    def process_tts_with_avatar(self, text, existing_audio=None):
         """Process text-to-speech and avatar generation"""
         try:
-            print("\n→ Starting speech and avatar generation...")
-            # Step 1: Generate speech from text
-            print("Step 1/2: Generating speech audio...")
-            audio_path = self.generate_speech(text)
-            if not audio_path:
-                print("❌ Failed to generate speech audio")
-                return None
-            print(f"✓ Speech audio generated successfully at: {audio_path}")
+            print("\nStarting speech and avatar generation...")
+            # Step 1: Generate speech from text or use existing audio
+            if existing_audio and os.path.exists(existing_audio):
+                print("Using existing audio file...")
+                audio_path = existing_audio
+            else:
+                print("Step 1/2: Generating speech audio...")
+                audio_path = self.generate_speech(text)
+                if not audio_path:
+                    print("Failed to generate speech audio")
+                    return None
+            print(f"Speech audio ready at: {audio_path}")
                 
             # Step 2: Generate avatar video with the audio
             print("\nStep 2/2: Generating talking avatar video...")
             video_path = self.generate_avatar_video(audio_path)
             if not video_path:
-                print("❌ Failed to generate avatar video")
+                print("Failed to generate avatar video")
                 # Even if the video failed, we still have the audio
                 return {
                     "text": text,
                     "audio": audio_path,
                     "video": None
                 }
-            print(f"✓ Avatar video generated successfully at: {video_path}")
+            print(f"Avatar video generated successfully at: {video_path}")
                 
             return {
                 "text": text,
@@ -364,15 +377,15 @@ class DockerBasedDigitalTwin:
                 "video": video_path
             }
         except Exception as e:
-            print(f"❌ Error in process_tts_with_avatar: {e}")
+            print(f"Error in process_tts_with_avatar: {e}")
             traceback.print_exc()
             return None
         finally:
-            print("→ Speech and avatar processing completed")
+            print("Speech and avatar processing completed")
 
     def start_listening(self):
         """Start listening for audio input using Whisper"""
-        print("🎤 Initializing Whisper Voice Assistant...")
+        print("Initializing Whisper Voice Assistant...")
         
         # Initialize the voice assistant if not already done
         if not self.voice_assistant:
@@ -385,7 +398,7 @@ class DockerBasedDigitalTwin:
         # Start listening for wake words
         self.voice_assistant.start_listening()
         
-        print("🎤 Listening for wake word... Say 'Hey Jim' to activate")
+        print("Listening for wake word... Say 'Hey Jim' to activate")
     
     def stop_listening(self):
         """Stop the voice assistant"""
@@ -476,7 +489,7 @@ def live_voice_chat():
         # Start listening for wake word
         digital_twin.start_listening()
         
-        print("📢 AI Digital Twin is now listening. Say 'Hey Jim' to activate.")
+        print("AI Digital Twin is now listening. Say 'Hey Jim' to activate.")
         print("Press Ctrl+C to exit.")
         
         try:
@@ -546,6 +559,8 @@ def main():
         # Set up argument parser
         parser = argparse.ArgumentParser(description='AI Digital Twin')
         parser.add_argument('--input', type=str, help='Text input to query the AI directly')
+        parser.add_argument('--test-tts', type=str, help='Test text-to-speech and avatar generation with given text')
+        parser.add_argument('--use-audio', type=str, help='Use an existing audio file instead of generating TTS')
         args = parser.parse_args()
 
         # Load environment variables
@@ -558,8 +573,20 @@ def main():
             # Decide if you want to exit or continue without API key
             # sys.exit(1) # Uncomment to exit if .env loading fails critically
 
+        # If test-tts is provided, test TTS and avatar generation
+        if args.test_tts:
+            print("\nTesting TTS and avatar generation...")
+            temp_twin = DockerBasedDigitalTwin()
+            result = temp_twin.process_tts_with_avatar(args.test_tts, args.use_audio)
+            if result:
+                print("\nGeneration successful!")
+                print(f"Audio file: {result['audio']}")
+                print(f"Video file: {result['video']}")
+            else:
+                print("Generation failed. Check the logs above for details.")
+                exit_code = 1
         # If input is provided, use simple query mode
-        if args.input:
+        elif args.input:
             # Get response from API
             response = simple_query(args.input)
             if response:
