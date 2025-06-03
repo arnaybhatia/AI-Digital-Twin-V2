@@ -284,64 +284,6 @@ class DockerBasedDigitalTwin:
             traceback.print_exc()
             return None
 
-    def generate_avatar_video(self, audio_path: str) -> Optional[str]:
-        """Generate a talking avatar video using the KDTalker Docker container"""
-        try:
-            output_filename = f"kdtalker_output_{uuid.uuid4()}.mp4"
-            output_path = os.path.join(self.temp_video_dir, output_filename)
-
-            # Convert paths for Docker volume mapping
-            docker_audio = f"/data/temp_audio/{os.path.basename(audio_path)}"
-            docker_output = f"/data/temp_video/{output_filename}"
-            docker_image = f"/data/{os.path.basename(self.source_image)}"
-
-            # Prepare the Docker Compose command
-            cmd = [
-                "docker", "compose", "exec", "-T", "kdtalker",
-                "python3", "inference.py",
-                "-source_image", docker_image,
-                "-driven_audio", docker_audio,
-                "-output", docker_output
-            ]
-
-            print(f"Generating avatar video with KDTalker service")
-            print(f"Using audio file: {audio_path}")
-            print(f"Output will be saved to: {output_path}")
-
-            # Run with UTF-8 encoding explicitly
-            result = subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                encoding='utf-8',
-                errors='replace'
-            )
-
-            if result.returncode != 0:
-                print(f"Error running KDTalker: {result.stderr}")
-                return None
-
-            # Verify the file was created
-            if os.path.exists(output_path):
-                print(f"Avatar video generated successfully: {output_path}")
-                return output_path
-            else:
-                print(f"Error: Output file not created at {output_path}")
-                print("Command output:", result.stdout)
-                print("Error output:", result.stderr)
-                return None
-
-        except subprocess.CalledProcessError as e:
-             print(f"[KDTalker] Docker Error: {e}")
-             if hasattr(e, 'stderr'):
-                 print(f"Stderr: {e.stderr}")
-             return None
-        except Exception as e:
-            print(f"[KDTalker] Error: {e}")
-            traceback.print_exc()
-            return None
-
     def process_tts_with_avatar(self, text, existing_audio=None):
         """Process text-to-speech and avatar generation"""
         try:

@@ -1,21 +1,6 @@
-services:
-  kdtalker:
-    build: ./kdtalker
-    volumes:
-      - ./data:/app/kdtalker/data # Mount data directory for input/output
-    deploy:
-      resources:
-        limits:
-          memory: 8G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
+version: '3.8'
 
+services:
   zonos:
     build: ./zonos
     volumes:
@@ -25,6 +10,31 @@ services:
       resources:
         limits:
           memory: 6G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  musetalk:
+    build: ./musetalk
+    container_name: musetalk_inference
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+    volumes:
+      - ./musetalk/inputs:/app/inputs
+      - ./musetalk/outputs:/app/outputs
+      - ./musetalk/results:/app/results
+      - ./musetalk/configs:/app/configs
+    ports:
+      - "7860:7860"
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
         reservations:
           devices:
             - driver: nvidia
