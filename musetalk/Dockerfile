@@ -6,54 +6,57 @@ ENV PYTHONUNBUFFERED=1
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=${CUDA_HOME}/bin:${PATH}
 ENV LD_LIBRARY_PATH=${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}
+# Setting timezone can prevent some tzdata prompts
+ENV TZ=UTC
 
 # Install system dependencies
-RUN apt-get update
-RUN apt-get install -y \
-    python3.10 \
-    python3.10-dev \
+# Updated for Ubuntu 22.04 compatibility
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-dev \
     python3-pip \
     git \
     wget \
     curl \
     ffmpeg \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
     libgomp1 \
     libsndfile1 \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Create symbolic links for python
-RUN ln -sf /usr/bin/python3.10 /usr/bin/python3 && \
-    ln -sf /usr/bin/python3.10 /usr/bin/python
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Set working directory
 WORKDIR /app
 
-# Clone the repository
+# Install gdown with --break-system-packages flag
+RUN python3 -m pip install --break-system-packages gdown
+
+# Clone the repository (Assuming this is intended, if not, adjust COPY accordingly)
+# If you have the MuseTalk code locally and want to use that,
+# you should COPY . . instead of git clone.
+# For now, keeping the git clone as per your original Dockerfile structure.
 RUN git clone https://github.com/TMElyralab/MuseTalk.git . && \
     chmod +x *.sh
 
-# Upgrade pip and install Python dependencies
-RUN python3 -m pip install --upgrade pip
-
-# Install PyTorch 2.0.1 with CUDA 11.8 support
-RUN pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
-    --index-url https://download.pytorch.org/whl/cu118
+# Install PyTorch with CUDA support
+RUN pip3 install --break-system-packages torch torchvision torchaudio
 
 # Copy and install requirements
 COPY requirements.txt /app/requirements.txt
-RUN pip install -r requirements.txt
+RUN python3 -m pip install --break-system-packages -r requirements.txt
 
 # Install MMLab packages
-RUN pip install --no-cache-dir -U openmim && \
-    mim install mmengine && \
-    mim install "mmcv==2.0.1" && \
-    mim install "mmdet==3.1.0" && \
-    mim install "mmpose==1.1.0"
+RUN python3 -m pip install --break-system-packages --no-cache-dir -U openmim && \
+    python3 -m mim install mmengine && \
+    python3 -m mim install "mmcv==2.0.1" && \
+    python3 -m mim install "mmdet==3.1.0" && \
+    python3 -m mim install "mmpose==1.1.0"
 
 # Create models directory
 RUN mkdir -p models
@@ -99,6 +102,7 @@ RUN echo "Downloading model weights..." && \
     "https://huggingface.co/ByteDance/LatentSync/resolve/main/latentsync_syncnet.pt" && \
     \
     # Download face parsing weights using gdown (Google Drive)
+    # Ensure gdown is installed via apt or pip if this fails. It's added to apt install now.
     gdown "1wF8P-hfWBoQZ-X9Rl0Ak_wMqxzjjElvP" -O models/face-parse-bisent/79999_iter.pth && \
     wget -q --show-progress -O models/face-parse-bisent/resnet18-5c106cde.pth \
     "https://download.pytorch.org/models/resnet18-5c106cde.pth"
