@@ -14,6 +14,23 @@ services:
               count: 1
               capabilities: [gpu]
 
+  sadtalker:
+    build: ./sadtalker
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./data:/app/data # Mount data directory for input/output
+      - ./results:/app/results # Mount results directory
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 volumes:
   data: # Existing volume definition
   zonos_hf_cache: # Re-define the named volume for persistence

@@ -17,6 +17,7 @@ import speech_recognition as sr
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from whisper_assistant import VoiceAssistant
+from sadtalker_service import SadTalkerService
 
 # Global event for interrupting processes
 interrupt_event = threading.Event()
@@ -235,6 +236,12 @@ class DockerBasedDigitalTwin:
         
         # Create voice assistant for real-time transcription
         self.voice_assistant = None
+        
+        # Initialize SadTalker service
+        self.sadtalker_service = SadTalkerService(
+            data_dir=self.data_dir,
+            results_dir=os.path.join(self.base_dir, "results")
+        )
 
     def generate_speech(self, text: str) -> Optional[str]:
         """Generate speech using the Zonos Docker container service"""
@@ -281,6 +288,30 @@ class DockerBasedDigitalTwin:
              return None
         except Exception as e:
             print(f"[Zonos TTS] Error: {e}")
+            traceback.print_exc()
+            return None
+
+    def generate_avatar_video(self, audio_path: str) -> Optional[str]:
+        """Generate avatar video using SadTalker Docker image"""
+        try:
+            print(f"Generating avatar video for audio: {audio_path}")
+            
+            # Use SadTalker service to generate video
+            video_path = self.sadtalker_service.generate_video(
+                audio_file=audio_path,
+                expression_scale=1.0,
+                still=True
+            )
+            
+            if video_path:
+                print(f"Avatar video generated successfully: {video_path}")
+                return video_path
+            else:
+                print("Failed to generate avatar video with SadTalker")
+                return None
+                
+        except Exception as e:
+            print(f"Error generating avatar video: {e}")
             traceback.print_exc()
             return None
 
