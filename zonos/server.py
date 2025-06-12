@@ -18,7 +18,7 @@ def check_and_download_models():
     """Checks if models are cached and downloads them if necessary."""
     models_to_check = {
         "transformer": "Zyphra/Zonos-v0.1-transformer",
-        # "hybrid": "Zyphra/Zonos-v0.1-hybrid" # Uncomment if you want hybrid too
+        "hybrid": "Zyphra/Zonos-v0.1-hybrid" # Uncomment if you want hybrid too
     }
     # Default Hugging Face cache directory
     cache_dir = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface/hub"))
