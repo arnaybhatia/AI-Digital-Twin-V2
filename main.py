@@ -17,7 +17,6 @@ import speech_recognition as sr
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 from whisper_assistant import VoiceAssistant
-from sadtalker_service import SadTalkerService
 
 # Global event for interrupting processes
 interrupt_event = threading.Event()
@@ -207,7 +206,7 @@ class DockerBasedDigitalTwin:
         self.data_dir = os.path.join(self.base_dir, "data")
         self.temp_audio_dir = os.path.join(self.data_dir, "temp_audio")
         self.temp_video_dir = os.path.join(self.data_dir, "temp_video")
-        self.source_image = os.path.join(self.data_dir, "source_image.png")
+        self.source_image = os.path.join(self.data_dir, "screenshot.png")
         self.speaker_audio = os.path.join(self.data_dir, "speaker.wav")
         
         # Audio recording settings
@@ -236,12 +235,6 @@ class DockerBasedDigitalTwin:
         
         # Create voice assistant for real-time transcription
         self.voice_assistant = None
-        
-        # Initialize SadTalker service
-        self.sadtalker_service = SadTalkerService(
-            data_dir=self.data_dir,
-            results_dir=os.path.join(self.base_dir, "results")
-        )
 
     def generate_speech(self, text: str) -> Optional[str]:
         """Generate speech using the Zonos Docker container service"""
@@ -292,24 +285,75 @@ class DockerBasedDigitalTwin:
             return None
 
     def generate_avatar_video(self, audio_path: str) -> Optional[str]:
-        """Generate avatar video using SadTalker Docker image"""
+        """Generate avatar video using SadTalker Docker container service"""
         try:
             print(f"Generating avatar video for audio: {audio_path}")
             
-            # Use SadTalker service to generate video
-            video_path = self.sadtalker_service.generate_video(
-                audio_file=audio_path,
-                expression_scale=1.0,
-                still=True
-            )
+            # Get the latest audio file from temp_audio directory
+            temp_audio_dir = os.path.join(self.data_dir, "temp_audio")
+            audio_files = [f for f in os.listdir(temp_audio_dir) if f.endswith('.wav')]
+            if not audio_files:
+                print("No audio files found in temp_audio directory")
+                return None
             
-            if video_path:
+            # Get the most recent audio file
+            latest_audio = max(audio_files, key=lambda f: os.path.getmtime(os.path.join(temp_audio_dir, f)))
+            
+            # Docker paths (use forward slashes)
+            docker_audio_path = f"/app/data/temp_audio/{latest_audio}"
+            docker_image_path = "/app/data/screenshot.png"
+            docker_results_path = "/app/results"
+            
+            # Generate unique output name
+            output_filename = f"sadtalker_output_{uuid.uuid4()}.mp4"
+            
+            print(f"Using audio file: {latest_audio}")
+            print(f"Using image: screenshot.png")
+            
+            # Prepare the Docker Compose command
+            cmd = [
+                "docker", "compose", "exec", "-T", "sadtalker",
+                "python", "inference.py",
+                "--driven_audio", docker_audio_path,
+                "--source_image", docker_image_path,
+                "--result_dir", docker_results_path,
+                "--preprocess", "full",
+                "--still"
+            ]
+            
+            print("Generating talking head video with SadTalker...")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                print(f"Error running SadTalker: {result.stderr}")
+                return None
+            
+            # Find the generated video file in results directory
+            results_dir = os.path.join(self.base_dir, "results")
+            
+            # SadTalker creates timestamped directories, find the latest one
+            result_dirs = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d))]
+            if not result_dirs:
+                print("No result directories found")
+                return None
+            
+            latest_result_dir = max(result_dirs, key=lambda d: os.path.getctime(os.path.join(results_dir, d)))
+            result_path = os.path.join(results_dir, latest_result_dir)
+            
+            # Find the generated video file
+            video_files = [f for f in os.listdir(result_path) if f.endswith('.mp4')]
+            if video_files:
+                video_path = os.path.join(result_path, video_files[0])
                 print(f"Avatar video generated successfully: {video_path}")
                 return video_path
             else:
-                print("Failed to generate avatar video with SadTalker")
+                print("No video files found in results directory")
                 return None
                 
+        except subprocess.CalledProcessError as e:
+            print(f"[SadTalker] Docker Error: {e}")
+            print(f"Stderr: {e.stderr}")
+            return None
         except Exception as e:
             print(f"Error generating avatar video: {e}")
             traceback.print_exc()
@@ -598,10 +642,10 @@ def main():
         else:
             startup_message()
 
-            # Select microphone for input
-            mic_index = list_microphones()
+            # Use default microphone (skip selection)
+            mic_index = None  # None means use default microphone
 
-            # Initialize digital twin system with selected microphone
+            # Initialize digital twin system with default microphone
             # Ensure digital_twin is initialized *before* the try block that uses it in finally
             digital_twin = DockerBasedDigitalTwin(mic_device_index=mic_index)
 

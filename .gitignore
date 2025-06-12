@@ -6,6 +6,7 @@
 /data/temp_audio
 /data/temp_video
 /training_audio
+/results
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
