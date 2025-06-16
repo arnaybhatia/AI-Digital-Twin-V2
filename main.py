@@ -256,7 +256,7 @@ class DockerBasedDigitalTwin:
                 "--text", text,
                 "--output", docker_output, # Pass the forward-slash path
                 "--speaker_audio", docker_speaker_audio,
-                "--model", "hybrid"  # Explicitly use transformer model
+                "--model", "transformer"  # Explicitly use transformer model
             ]
 
             print(f"Generating speech with Zonos service: '{text}'")
