@@ -3,8 +3,10 @@
 /__pycache__
 .DS_Store
 /temp_audio
+/data/temp_audio
+/data/temp_video
 /training_audio
-
+/results
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -128,3 +130,4 @@ cython_debug/
 # pixi environments
 .pixi
 *.egg-info
+.vscode/settings.json
