@@ -236,170 +236,11 @@ class DockerBasedDigitalTwin:
         # Create voice assistant for real-time transcription
         self.voice_assistant = None
 
-    def generate_speech(self, text: str) -> Optional[str]:
-        """Generate speech using the Zonos Docker container service"""
-        try:
-            output_filename = f"zonos_output_{uuid.uuid4()}.wav"
-            # Host path (uses OS-specific separators)
-            output_path = os.path.join(self.temp_audio_dir, output_filename)
 
-            # Docker path (MUST use forward slashes)
-            docker_output_relative = f"temp_audio/{output_filename}" # Use forward slash
-            docker_output = f"/data/{docker_output_relative}"
-            docker_speaker_audio = f"/data/{os.path.basename(self.speaker_audio)}" # Base name is fine
 
-            # Prepare the Docker Compose command
-            # Note: We use docker compose exec instead of docker run
-            cmd = [
-                "docker", "compose", "exec", "-T", "zonos",
-                "python3", "zonos_generate.py",
-                "--text", text,
-                "--output", docker_output, # Pass the forward-slash path
-                "--speaker_audio", docker_speaker_audio,
-                "--model", "transformer"  # Explicitly use transformer model
-            ]
 
-            print(f"Generating speech with Zonos service: '{text}'")
-            print(f"Output will be saved to: {output_path}")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
-            if result.returncode != 0:
-                print(f"Error running Zonos: {result.stderr}")
-                return None
 
-            # Verify the file was created
-            if os.path.exists(output_path):
-                print(f"Speech generated successfully: {output_path}")
-                return output_path
-            else:
-                print(f"Error: Output file not created at {output_path}")
-                print("Command output:", result.stdout)
-                return None
-
-        except subprocess.CalledProcessError as e:
-             print(f"[Zonos TTS] Docker Error: {e}")
-             print(f"Stderr: {e.stderr}")
-             return None
-        except Exception as e:
-            print(f"[Zonos TTS] Error: {e}")
-            traceback.print_exc()
-            return None
-
-    def generate_avatar_video(self, audio_path: str) -> Optional[str]:
-        """Generate avatar video using SadTalker Docker container service"""
-        try:
-            print(f"Generating avatar video for audio: {audio_path}")
-            
-            # Get the latest audio file from temp_audio directory
-            temp_audio_dir = os.path.join(self.data_dir, "temp_audio")
-            audio_files = [f for f in os.listdir(temp_audio_dir) if f.endswith('.wav')]
-            if not audio_files:
-                print("No audio files found in temp_audio directory")
-                return None
-            
-            # Get the most recent audio file
-            latest_audio = max(audio_files, key=lambda f: os.path.getmtime(os.path.join(temp_audio_dir, f)))
-            
-            # Docker paths (use forward slashes)
-            docker_audio_path = f"/app/data/temp_audio/{latest_audio}"
-            docker_image_path = "/app/data/screenshot.png"
-            docker_results_path = "/app/results"
-            
-            # Generate unique output name
-            output_filename = f"sadtalker_output_{uuid.uuid4()}.mp4"
-            
-            print(f"Using audio file: {latest_audio}")
-            print(f"Using image: screenshot.png")
-            
-            # Prepare the Docker Compose command
-            cmd = [
-                "docker", "compose", "exec", "-T", "sadtalker",
-                "python", "inference.py",
-                "--driven_audio", docker_audio_path,
-                "--source_image", docker_image_path,
-                "--result_dir", docker_results_path,
-                "--preprocess", "full",
-                "--still"
-            ]
-            
-            print("Generating talking head video with SadTalker...")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            
-            if result.returncode != 0:
-                print(f"Error running SadTalker: {result.stderr}")
-                return None
-            
-            # Find the generated video file in results directory
-            results_dir = os.path.join(self.base_dir, "results")
-            
-            # SadTalker creates timestamped directories, find the latest one
-            result_dirs = [d for d in os.listdir(results_dir) if os.path.isdir(os.path.join(results_dir, d))]
-            if not result_dirs:
-                print("No result directories found")
-                return None
-            
-            latest_result_dir = max(result_dirs, key=lambda d: os.path.getctime(os.path.join(results_dir, d)))
-            result_path = os.path.join(results_dir, latest_result_dir)
-            
-            # Find the generated video file
-            video_files = [f for f in os.listdir(result_path) if f.endswith('.mp4')]
-            if video_files:
-                video_path = os.path.join(result_path, video_files[0])
-                print(f"Avatar video generated successfully: {video_path}")
-                return video_path
-            else:
-                print("No video files found in results directory")
-                return None
-                
-        except subprocess.CalledProcessError as e:
-            print(f"[SadTalker] Docker Error: {e}")
-            print(f"Stderr: {e.stderr}")
-            return None
-        except Exception as e:
-            print(f"Error generating avatar video: {e}")
-            traceback.print_exc()
-            return None
-
-    def process_tts_with_avatar(self, text, existing_audio=None):
-        """Process text-to-speech and avatar generation"""
-        try:
-            print("\nStarting speech and avatar generation...")
-            # Step 1: Generate speech from text or use existing audio
-            if existing_audio and os.path.exists(existing_audio):
-                print("Using existing audio file...")
-                audio_path = existing_audio
-            else:
-                print("Step 1/2: Generating speech audio...")
-                audio_path = self.generate_speech(text)
-                if not audio_path:
-                    print("Failed to generate speech audio")
-                    return None
-            print(f"Speech audio ready at: {audio_path}")
-                
-            # Step 2: Generate avatar video with the audio
-            print("\nStep 2/2: Generating talking avatar video...")
-            video_path = self.generate_avatar_video(audio_path)
-            if not video_path:
-                print("Failed to generate avatar video")
-                # Even if the video failed, we still have the audio
-                return {
-                    "text": text,
-                    "audio": audio_path,
-                    "video": None
-                }
-            print(f"Avatar video generated successfully at: {video_path}")
-                
-            return {
-                "text": text,
-                "audio": audio_path,
-                "video": video_path
-            }
-        except Exception as e:
-            print(f"Error in process_tts_with_avatar: {e}")
-            traceback.print_exc()
-            return None
-        finally:
-            print("Speech and avatar processing completed")
 
     def start_listening(self):
         """Start listening for audio input using Whisper"""
@@ -409,7 +250,6 @@ class DockerBasedDigitalTwin:
         if not self.voice_assistant:
             self.voice_assistant = VoiceAssistant(
                 api_response_func=get_response,
-                process_tts_with_avatar=self.process_tts_with_avatar,
                 device_index=self.mic_device_index
             )
         
@@ -461,37 +301,10 @@ def startup_message():
     print("="*50)
     print("\nSystem capabilities:")
     print("- Interactive conversation with API")
-    print("- Text-to-speech using Zonos Docker container")
-    print("- Talking avatar generation using KDTalker Docker container")
     print("\nType 'exit' or press Ctrl+C to quit")
     print("="*50 + "\n")
 
-def interactive_chat():
-    """Run an interactive chat session"""
-    global digital_twin
-    
-    # Initialize session with API
-    initialize_session()
-    
-    while not interrupt_event.is_set():
-        try:
-            # Get user input
-            user_input = input("\nYou: ")
-            if user_input.lower() in ['exit', 'quit']:
-                break
-                
-            # Process input and generate response video
-            result = digital_twin.process_input_to_video(text_input=user_input)
-            
-            if result:
-                print(f"\nAI: {result['text']}")
-                print(f"Audio generated: {result['audio']}")
-                print(f"Video generated: {result['video']}")
-                
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"Error in chat: {e}")
+
 
 def live_voice_chat():
     """Run a live voice chat session with wake word detection"""
@@ -529,42 +342,6 @@ def live_voice_chat():
         
     return success  # Return whether the function completed successfully
 
-def list_microphones():
-    """List all available microphones and let user choose one"""
-    print("\nAvailable microphones:")
-    
-    # Get list of microphone devices
-    mic_list = sr.Microphone.list_microphone_names()
-    
-    if not mic_list:
-        print("No microphones detected!")
-        return None
-    
-    # Print the available microphones with indexes
-    for i, mic_name in enumerate(mic_list):
-        print(f"[{i}] {mic_name}")
-    
-    # Ask user to select microphone
-    try:
-        while True:
-            choice = input("\nSelect microphone by number (or press Enter for default): ")
-            if not choice.strip():
-                print("Using default microphone")
-                return None
-            
-            choice = int(choice)
-            if 0 <= choice < len(mic_list):
-                print(f"Selected: [{choice}] {mic_list[choice]}")
-                return choice
-            else:
-                print(f"Invalid selection. Please choose a number between 0 and {len(mic_list) - 1}")
-    except ValueError:
-        print("Invalid input. Using default microphone.")
-        return None
-    except Exception as e:
-        print(f"Error during microphone selection: {e}")
-        return None
-
 def main():
     global digital_twin
     exit_code = 0
@@ -577,8 +354,6 @@ def main():
         # Set up argument parser
         parser = argparse.ArgumentParser(description='AI Digital Twin')
         parser.add_argument('--input', type=str, help='Text input to query the AI directly')
-        parser.add_argument('--test-tts', type=str, help='Test text-to-speech and avatar generation with given text')
-        parser.add_argument('--use-audio', type=str, help='Use an existing audio file instead of generating TTS')
         args = parser.parse_args()
 
         # Load environment variables
@@ -591,20 +366,8 @@ def main():
             # Decide if you want to exit or continue without API key
             # sys.exit(1) # Uncomment to exit if .env loading fails critically
 
-        # If test-tts is provided, test TTS and avatar generation
-        if args.test_tts:
-            print("\nTesting TTS and avatar generation...")
-            temp_twin = DockerBasedDigitalTwin()
-            result = temp_twin.process_tts_with_avatar(args.test_tts, args.use_audio)
-            if result:
-                print("\nGeneration successful!")
-                print(f"Audio file: {result['audio']}")
-                print(f"Video file: {result['video']}")
-            else:
-                print("Generation failed. Check the logs above for details.")
-                exit_code = 1
         # If input is provided, use simple query mode
-        elif args.input:
+        if args.input:
             # Get response from API
             response = simple_query(args.input)
             if response:
@@ -612,28 +375,6 @@ def main():
                 print("RESPONSE:")
                 print(response)
                 print("="*50)
-
-                # Generate speech directly from the response using docker run
-                print("\nGenerating speech with Zonos...")
-                # Initialize a temporary twin instance just for this call
-                temp_twin = DockerBasedDigitalTwin()
-                # Assuming generate_speech exists and works correctly in DockerBasedDigitalTwin
-                # speaker_audio_path = temp_twin.speaker_audio # Use default path
-
-                try:
-                    # Placeholder for actual speech generation call if needed
-                    # audio_path = temp_twin.generate_speech(response, speaker_audio_path)
-                    # if audio_path:
-                    #     print(f"Speech generated and saved to: {audio_path}")
-                    #     print("You can play this file with any audio player.")
-                    # else:
-                    #     print("Failed to generate speech. Check docker logs or output for details.")
-                    print("(Speech generation for --input mode not fully implemented in provided snippet)")
-                except AttributeError:
-                     print("Error: generate_speech method not found in DockerBasedDigitalTwin.")
-                except Exception as e:
-                    print(f"Error generating speech: {e}")
-                    traceback.print_exc()
             else:
                 print("Error: Failed to get a response from the API")
                 exit_code = 1
