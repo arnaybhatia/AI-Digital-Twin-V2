@@ -1,23 +1,8 @@
 services:
-  zonos:
-    build: ./zonos
-    volumes:
-      - ./data:/data # Existing volume for input/output
-      - zonos_hf_cache:/root/.cache/huggingface/hub # Re-add volume for model cache
-    deploy:
-      resources:
-        limits:
-          memory: 6G
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   sadtalker:
     build: ./sadtalker
     ports:
-      - "7860:7860"
+      - "7861:7860"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
       - ./results:/app/results # Mount results directory
@@ -31,6 +16,23 @@ services:
               count: 1
               capabilities: [gpu]
 
-volumes:
-  data: # Existing volume definition
-  zonos_hf_cache: # Re-define the named volume for persistence
+  fishspeech:
+    build: 
+      context: ./fishspeech
+      args:
+        HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data # Mount data directory for input/output
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
