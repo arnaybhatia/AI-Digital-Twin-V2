@@ -15,3 +15,24 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+  fishspeech:
+    build: 
+      context: ./fishspeech
+      args:
+        HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data # Mount data directory for input/output
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
