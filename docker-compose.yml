@@ -2,7 +2,7 @@ services:
   sadtalker:
     build: ./sadtalker
     ports:
-      - "7860:7860"
+      - "7861:7860"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
       - ./results:/app/results # Mount results directory
