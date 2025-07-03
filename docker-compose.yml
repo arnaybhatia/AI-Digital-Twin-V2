@@ -16,13 +16,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-  fishspeech:
+  dia:
     build: 
-      context: ./fishspeech
-      args:
-        HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-    env_file:
-      - .env
+      context: ./dia
     ports:
       - "8080:8080"
     volumes:
@@ -30,7 +26,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 12G
+          memory: 8G
         reservations:
           devices:
             - driver: nvidia
