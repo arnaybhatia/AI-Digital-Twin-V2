@@ -94,24 +94,191 @@ def get_response(user_input: str) -> str:
 
 
 # ——— Voice cloning ———
-def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
+def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
+    """Split text into sentences with natural sentence boundaries and token limit fallback"""
+    import re
+
+    # Split by natural sentence endings: . ! ?
+    # Keep the punctuation with the sentence
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+
+    # Clean up sentences and remove empty ones
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    # Further split long sentences by token limit
+    final_sentences = []
+    for sentence in sentences:
+        words = sentence.split()
+        if len(words) <= max_tokens:
+            if sentence.strip():  # Only add non-empty sentences
+                final_sentences.append(sentence)
+        else:
+            # Split long sentence into chunks
+            for i in range(0, len(words), max_tokens):
+                chunk = " ".join(words[i : i + max_tokens])
+                if chunk.strip():
+                    final_sentences.append(chunk)
+
+    # If no valid sentences found, return original text as single sentence
+    if not final_sentences:
+        final_sentences = [text.strip()]
+
+    return final_sentences
+
+
+def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
+    """Clone voice for a single sentence"""
     with open(source_wav, "rb") as f:
         audio_bytes = f.read()
+
     payload = {
         "text": text,
         "format": "wav",
         "references": [{"audio": audio_bytes, "text": text}],
     }
     packed = msgpack.packb(payload, use_bin_type=True)
-    resp = requests.post(
-        f"{FISH_API_URL}/v1/tts",
-        data=packed,
-        headers={"Content-Type": "application/msgpack"},
-    )
-    resp.raise_for_status()
-    with open(out_wav, "wb") as out:
-        out.write(resp.content)
-    return out_wav
+
+    try:
+        resp = requests.post(
+            f"{FISH_API_URL}/v1/tts",
+            data=packed,
+            headers={"Content-Type": "application/msgpack"},
+        )
+        resp.raise_for_status()
+
+        with open(out_wav, "wb") as out:
+            out.write(resp.content)
+        return out_wav
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 500:
+            raise RuntimeError(
+                f"FishSpeech server error - likely CUDA/GPU issue. Check container logs: {e}"
+            )
+        else:
+            raise RuntimeError(f"FishSpeech API error ({e.response.status_code}): {e}")
+    except requests.exceptions.ConnectionError:
+        raise RuntimeError(
+            "Cannot connect to FishSpeech API. Ensure container is running on port 8080"
+        )
+    except Exception as e:
+        raise RuntimeError(f"Voice cloning failed: {e}")
+
+
+def combine_audio_files(audio_files: list, output_path: str) -> str:
+    """Combine multiple audio files using ffmpeg"""
+    import tempfile
+
+    # Create a temporary file list for ffmpeg
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        for audio_file in audio_files:
+            f.write(f"file '{os.path.abspath(audio_file)}'\n")
+        file_list_path = f.name
+
+    try:
+        # Use ffmpeg to concatenate audio files
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            file_list_path,
+            "-c",
+            "copy",
+            output_path,
+        ]
+        subprocess.run(cmd, check=True, capture_output=True)
+        return output_path
+    except subprocess.CalledProcessError:
+        # Fallback: use ffmpeg with filter_complex for better compatibility
+        try:
+            inputs = []
+            filter_parts = []
+
+            for i, audio_file in enumerate(audio_files):
+                inputs.extend(["-i", audio_file])
+                filter_parts.append(f"[{i}:0]")
+
+            filter_complex = (
+                "".join(filter_parts) + f"concat=n={len(audio_files)}:v=0:a=1[out]"
+            )
+
+            cmd = (
+                ["ffmpeg", "-y"]
+                + inputs
+                + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
+            )
+            subprocess.run(cmd, check=True, capture_output=True)
+            return output_path
+        except subprocess.CalledProcessError:
+            # If both methods fail, return the first audio file
+            if audio_files:
+                shutil.copy(audio_files[0], output_path)
+                return output_path
+            raise RuntimeError("Failed to combine audio files")
+    finally:
+        # Clean up temporary file list
+        try:
+            os.unlink(file_list_path)
+        except:
+            pass
+
+
+def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
+    """Clone voice with sentence batching using dedicated temp directory"""
+    # Create dedicated temp directory for this operation
+    project_root = os.path.abspath(os.path.dirname(__file__))
+    temp_dir = os.path.join(project_root, "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Create unique subdirectory for this operation
+    operation_id = uuid.uuid4().hex[:8]
+    operation_temp_dir = os.path.join(temp_dir, f"voice_clone_{operation_id}")
+    os.makedirs(operation_temp_dir, exist_ok=True)
+
+    try:
+        # Split text into manageable sentences
+        sentences = split_text_into_sentences(text)
+
+        if len(sentences) == 1:
+            # Single sentence, process directly to output
+            return clone_voice_sentence(text, source_wav, out_wav)
+
+        # Multiple sentences, batch process in temp directory
+        temp_audio_files = []
+
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+
+            temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
+            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path)
+            temp_audio_files.append(temp_audio_path)
+
+        if not temp_audio_files:
+            raise RuntimeError("No valid sentences to process")
+
+        if len(temp_audio_files) == 1:
+            # Only one valid sentence, move directly to output
+            shutil.move(temp_audio_files[0], out_wav)
+        else:
+            # Combine multiple audio files
+            combine_audio_files(temp_audio_files, out_wav)
+
+        return out_wav
+
+    finally:
+        # Clean up the entire operation temp directory
+        try:
+            if os.path.exists(operation_temp_dir):
+                shutil.rmtree(operation_temp_dir)
+        except Exception as e:
+            print(
+                f"Warning: Failed to clean up temp directory {operation_temp_dir}: {e}"
+            )
 
 
 def clone_voice(text: str, src_wav: str, out_wav: str) -> str:
@@ -240,11 +407,29 @@ def sadtalker_animate(
 
 
 # ——— Generator pipeline ———
-def pipeline(user_text: str, voice_file, image_file, video_file, use_ai: bool):
+def pipeline(
+    user_text: str,
+    voice_file,
+    image_file,
+    video_file,
+    use_ai: bool,
+    history: list,
+    progress=gr.Progress(),
+):
     workdir = tempfile.mkdtemp(prefix="dtwn_")
     uid = uuid.uuid4().hex
+    generation_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
     try:
+        # Clear outputs and show initial progress
+        progress(0.1, desc="🔄 Starting generation...")
+        yield (
+            "🔄 Starting generation...",  # api_response
+            None,  # audio_out
+            None,  # video_out
+            history,  # history unchanged
+        )
+
         src_wav = os.path.join(workdir, f"{uid}_src.wav")
         img_in = os.path.join(
             workdir, f"{uid}_img{os.path.splitext(image_file.name)[1]}"
@@ -258,24 +443,62 @@ def pipeline(user_text: str, voice_file, image_file, video_file, use_ai: bool):
         shutil.copy(video_file.name, vid_in)
 
         # 1) Get text (either from AI or use raw input)
+        progress(
+            0.2,
+            desc="🧠 Generating AI response..." if use_ai else "📝 Processing text...",
+        )
+        yield (
+            "🧠 Generating AI response..." if use_ai else "📝 Processing text...",
+            None,
+            None,
+            history,
+        )
+
         if use_ai:
             assistant_text = get_response(user_text)
         else:
             assistant_text = user_text
-        # Update only the Textbox, leave audio/video untouched
-        yield assistant_text, gr.update(), gr.update()
+
+        progress(0.4, desc="✅ Text ready")
+        yield (assistant_text, None, None, history)
 
         # 2) Clone the voice
+        progress(0.5, desc="🎤 Cloning voice...")
+        yield (assistant_text, None, None, history)
+
         cloned_wav = os.path.join(workdir, f"{uid}_clone.wav")
         clone_voice(assistant_text, src_wav, cloned_wav)
-        # Update only the Audio, leave text/video untouched
-        yield gr.update(), cloned_wav, gr.update()
+
+        progress(0.7, desc="✅ Voice cloned")
+        yield (assistant_text, cloned_wav, None, history)
 
         # 3) Animate with SadTalker
-        final_mp4 = sadtalker_animate(img_in, vid_in, cloned_wav)
-        # Update only the Video, leave text/audio untouched
-        yield gr.update(), gr.update(), final_mp4
+        progress(0.8, desc="🎭 Creating talking avatar...")
+        yield (assistant_text, cloned_wav, None, history)
 
+        final_mp4 = sadtalker_animate(img_in, vid_in, cloned_wav)
+
+        # Add to history
+        history_entry = {
+            "timestamp": generation_time,
+            "input": user_text,
+            "response": assistant_text,
+            "audio": cloned_wav,
+            "video": final_mp4,
+            "mode": "AI Generated" if use_ai else "Raw Text",
+        }
+        history.append(history_entry)
+
+        # Keep only last 10 generations
+        if len(history) > 10:
+            history = history[-10:]
+
+        progress(1.0, desc="✅ Complete!")
+        yield (assistant_text, cloned_wav, final_mp4, history)
+
+    except Exception as e:
+        progress(0, desc="❌ Failed")
+        yield (f"❌ Error: {str(e)}", None, None, history)
     finally:
         # Clean up temporary working directory
         try:
@@ -439,242 +662,130 @@ if __name__ == "__main__":
     )
 
     with demo:
+        # State for generation history
+        history_state = gr.State([])
+
         gr.HTML('<div class="main-header">AI Digital Twin V2</div>')
         gr.HTML(
             '<div class="description">Create personalized talking avatars with AI-powered voice cloning and facial animation</div>'
         )
 
-        with gr.Column(elem_classes="input-section"):
-            gr.HTML('<div class="section-header">Input Configuration</div>')
-
-            with gr.Row():
-                with gr.Column(scale=3):
-                    txt = gr.Textbox(
-                        lines=3,
-                        placeholder="Enter your message or prompt here...",
-                        label="Text Input",
-                        container=True,
-                    )
-                with gr.Column(scale=1, elem_classes="toggle-container"):
-                    use_ai_toggle = gr.Checkbox(
-                        label="Use AI Response",
-                        value=True,
-                        info="Toggle between AI generation and raw text",
-                    )
-
-            gr.HTML('<div class="section-header">Media Files</div>')
-            with gr.Row():
-                voice = gr.File(label="Voice Sample", file_types=["audio"], height=100)
-                img = gr.File(label="Portrait Image", file_types=["image"], height=100)
-                vid = gr.File(label="Driving Video", file_types=["video"], height=100)
-
         with gr.Row():
-            btn = gr.Button(
-                "Generate Digital Twin",
-                variant="primary",
-                size="lg",
-                elem_classes="generate-btn",
-            )
+            # Left column - Input and Output
+            with gr.Column(scale=2):
+                with gr.Column(elem_classes="input-section"):
+                    gr.HTML('<div class="section-header">Input Configuration</div>')
 
-        gr.HTML(
-            '<div class="progress-info">Results will appear progressively as each stage completes</div>'
+                    with gr.Row():
+                        with gr.Column(scale=3):
+                            txt = gr.Textbox(
+                                lines=3,
+                                placeholder="Enter your message or prompt here...",
+                                label="Text Input",
+                                container=True,
+                            )
+                        with gr.Column(scale=1, elem_classes="toggle-container"):
+                            use_ai_toggle = gr.Checkbox(
+                                label="Use AI Response",
+                                value=True,
+                                info="Toggle between AI generation and raw text",
+                            )
+
+                    gr.HTML('<div class="section-header">Media Files</div>')
+                    with gr.Row():
+                        voice = gr.File(
+                            label="Voice Sample", file_types=["audio"], height=100
+                        )
+                        img = gr.File(
+                            label="Portrait Image", file_types=["image"], height=100
+                        )
+                        vid = gr.File(
+                            label="Driving Video", file_types=["video"], height=100
+                        )
+
+                with gr.Row():
+                    btn = gr.Button(
+                        "Generate Digital Twin",
+                        variant="primary",
+                        size="lg",
+                        elem_classes="generate-btn",
+                    )
+                    clear_btn = gr.Button(
+                        "Clear Outputs", variant="secondary", size="lg"
+                    )
+
+                with gr.Column(elem_classes="output-section"):
+                    gr.HTML('<div class="section-header">Generated Response</div>')
+                    api_response = gr.Textbox(
+                        label="AI Response", interactive=False, lines=3
+                    )
+
+                    gr.HTML('<div class="section-header">Generated Media</div>')
+                    with gr.Row():
+                        audio_out = gr.Audio(label="Cloned Voice", type="filepath")
+                        video_out = gr.Video(label="Talking Avatar")
+
+            # Right column - Generation History
+            with gr.Column(scale=1, elem_classes="input-section"):
+                gr.HTML('<div class="section-header">Generation History</div>')
+
+                def format_history(history):
+                    if not history:
+                        return "No generations yet. Create your first digital twin!"
+
+                    formatted = ""
+                    for i, entry in enumerate(reversed(history[-5:])):  # Show last 5
+                        formatted += f"""
+                        **#{len(history) - i} - {entry["timestamp"]}**
+                        - **Input:** {entry["input"][:50]}{"..." if len(entry["input"]) > 50 else ""}
+                        - **Mode:** {entry["mode"]}
+                        - **Response:** {entry["response"][:100]}{"..." if len(entry["response"]) > 100 else ""}
+                        
+                        ---
+                        """
+                    return formatted
+
+                history_display = gr.Markdown(
+                    value="No generations yet. Create your first digital twin!",
+                    label="Recent Generations",
+                )
+
+                # History controls
+                with gr.Row():
+                    refresh_history_btn = gr.Button("🔄 Refresh", size="sm")
+                    clear_history_btn = gr.Button("🗑️ Clear History", size="sm")
+
+        def clear_outputs():
+            return "", None, None
+
+        def clear_history():
+            return [], "No generations yet. Create your first digital twin!"
+
+        def refresh_history_display(history):
+            return format_history(history)
+
+        # Event handlers
+        clear_btn.click(fn=clear_outputs, outputs=[api_response, audio_out, video_out])
+
+        clear_history_btn.click(
+            fn=clear_history, outputs=[history_state, history_display]
         )
 
-        with gr.Column(elem_classes="output-section"):
-            gr.HTML('<div class="section-header">Generated Response</div>')
-            api_response = gr.Textbox(label="AI Response", interactive=False, lines=3)
-
-            gr.HTML('<div class="section-header">Generated Media</div>')
-            with gr.Row():
-                audio_out = gr.Audio(label="Cloned Voice", type="filepath")
-                video_out = gr.Video(label="Talking Avatar")
+        refresh_history_btn.click(
+            fn=refresh_history_display,
+            inputs=[history_state],
+            outputs=[history_display],
+        )
 
         btn.click(
             fn=pipeline,
-            inputs=[txt, voice, img, vid, use_ai_toggle],
-            outputs=[api_response, audio_out, video_out],
+            inputs=[txt, voice, img, vid, use_ai_toggle, history_state],
+            outputs=[api_response, audio_out, video_out, history_state],
+        ).then(
+            fn=refresh_history_display,
+            inputs=[history_state],
+            outputs=[history_display],
         )
 
+if __name__ == "__main__":
     demo.launch(server_name="127.0.0.1")
-
-    with demo:
-        gr.HTML('<div class="main-header">AI Digital Twin V2</div>')
-        gr.HTML(
-            '<div style="text-align: center; color: #888; margin-bottom: 2em;">Create your personalized talking avatar with AI-powered voice cloning and facial animation</div>'
-        )
-
-        with gr.Column(elem_classes="input-section"):
-            gr.HTML('<div class="section-header">Input Configuration</div>')
-
-            with gr.Row():
-                with gr.Column(scale=3):
-                    txt = gr.Textbox(
-                        lines=3,
-                        placeholder="Enter your message or prompt here...",
-                        label="Text Input",
-                        container=True,
-                        show_label=True,
-                    )
-                with gr.Column(scale=1, elem_classes="toggle-container"):
-                    use_ai_toggle = gr.Checkbox(
-                        label="Use AI Response",
-                        value=True,
-                        info="Toggle to use AI or raw text",
-                        container=True,
-                    )
-
-            gr.HTML('<div class="section-header">Media Upload</div>')
-            with gr.Row():
-                voice = gr.File(
-                    label="Voice Sample",
-                    file_types=["audio"],
-                    container=True,
-                    height=120,
-                )
-                img = gr.File(
-                    label="Portrait Image",
-                    file_types=["image"],
-                    container=True,
-                    height=120,
-                )
-                vid = gr.File(
-                    label="Driving Video",
-                    file_types=["video"],
-                    container=True,
-                    height=120,
-                )
-
-        with gr.Row():
-            btn = gr.Button(
-                "Generate Digital Twin",
-                variant="primary",
-                size="lg",
-                elem_classes="generate-btn",
-            )
-
-        gr.HTML(
-            '<div style="text-align: center; color: #888; margin: 10px 0;">Outputs will appear as soon as they\'re ready...</div>'
-        )
-
-        with gr.Column(elem_classes="output-section"):
-            gr.HTML('<div class="section-header">AI Response</div>')
-            api_response = gr.Textbox(
-                label="Assistant Response",
-                interactive=False,
-                lines=3,
-                container=True,
-                show_label=True,
-            )
-
-            gr.HTML('<div class="section-header">Generated Media</div>')
-            with gr.Row():
-                audio_out = gr.Audio(
-                    label="Cloned Voice",
-                    type="filepath",
-                    container=True,
-                    show_label=True,
-                )
-                video_out = gr.Video(
-                    label="Talking Avatar", container=True, show_label=True
-                )
-
-        btn.click(
-            fn=pipeline,
-            inputs=[txt, voice, img, vid, use_ai_toggle],
-            outputs=[api_response, audio_out, video_out],
-        )
-
-    demo.launch(
-        server_name="127.0.0.1", show_api=False, show_error=True, favicon_path=None
-    )
-
-    with demo:
-        gr.HTML('<div class="main-header">🎭 AI Digital Twin V2</div>')
-        gr.HTML(
-            '<div style="text-align: center; color: #888; margin-bottom: 2em;">Create your personalized talking avatar with AI-powered voice cloning and facial animation</div>'
-        )
-
-        with gr.Column(elem_classes="input-section"):
-            gr.HTML('<div class="section-header">💬 Input Configuration</div>')
-
-            with gr.Row():
-                with gr.Column(scale=3):
-                    txt = gr.Textbox(
-                        lines=3,
-                        placeholder="💭 Enter your message or prompt here...",
-                        label="📝 Text Input",
-                        container=True,
-                        show_label=True,
-                    )
-                with gr.Column(scale=1, elem_classes="toggle-container"):
-                    use_ai_toggle = gr.Checkbox(
-                        label="🧠 AI Response Mode",
-                        value=True,
-                        info="✨ Toggle to use AI or raw text",
-                        container=True,
-                    )
-
-            gr.HTML('<div class="section-header">📁 Media Upload</div>')
-            with gr.Row():
-                voice = gr.File(
-                    label="🎤 Voice Sample",
-                    file_types=["audio"],
-                    container=True,
-                    height=120,
-                )
-                img = gr.File(
-                    label="📸 Portrait Image",
-                    file_types=["image"],
-                    container=True,
-                    height=120,
-                )
-                vid = gr.File(
-                    label="🎬 Driving Video",
-                    file_types=["video"],
-                    container=True,
-                    height=120,
-                )
-
-        with gr.Row():
-            btn = gr.Button(
-                "🚀 Generate Digital Twin",
-                variant="primary",
-                size="lg",
-                elem_classes="generate-btn",
-            )
-
-        gr.HTML(
-            '<div class="progress-text">⏳ Outputs will appear as soon as they\'re ready...</div>'
-        )
-
-        with gr.Column(elem_classes="output-section"):
-            gr.HTML('<div class="section-header">🎯 AI Response</div>')
-            api_response = gr.Textbox(
-                label="🤖 Assistant Response",
-                interactive=False,
-                lines=3,
-                container=True,
-                show_label=True,
-            )
-
-            gr.HTML('<div class="section-header">🎨 Generated Media</div>')
-            with gr.Row():
-                audio_out = gr.Audio(
-                    label="🔊 Cloned Voice",
-                    type="filepath",
-                    container=True,
-                    show_label=True,
-                )
-                video_out = gr.Video(
-                    label="🎭 Talking Avatar", container=True, show_label=True
-                )
-
-        btn.click(
-            fn=pipeline,
-            inputs=[txt, voice, img, vid, use_ai_toggle],
-            outputs=[api_response, audio_out, video_out],
-        )
-
-    demo.launch(
-        server_name="127.0.0.1", show_api=False, show_error=True, favicon_path=None
-    )
