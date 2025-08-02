@@ -5,23 +5,22 @@ import shutil
 import subprocess
 import tempfile
 import re
-import msgpack
 import requests
 from dotenv import load_dotenv
 import gradio as gr
 
 # ——— Environment ———
 API_KEY = None
-FISH_API_URL = None
+CHATTERBOX_API_URL = None
 
 
 def load_env():
     load_dotenv()
-    global API_KEY, FISH_API_URL
+    global API_KEY, CHATTERBOX_API_URL
     API_KEY = os.getenv("TMPT_API_KEY")
     if not API_KEY:
         raise RuntimeError("TMPT_API_KEY not found in .env")
-    FISH_API_URL = os.getenv("FISH_API_URL", "http://localhost:8080")
+    CHATTERBOX_API_URL = os.getenv("CHATTERBOX_API_URL", "http://localhost:8080")
 
 
 # ——— TMPT client ———
@@ -127,22 +126,18 @@ def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
 
 
 def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
-    """Clone voice for a single sentence"""
-    with open(source_wav, "rb") as f:
-        audio_bytes = f.read()
-
+    """Clone voice for a single sentence using Chatterbox"""
+    
     payload = {
         "text": text,
-        "format": "wav",
-        "references": [{"audio": audio_bytes, "text": text}],
+        "audio_prompt_path": source_wav
     }
-    packed = msgpack.packb(payload, use_bin_type=True)
 
     try:
         resp = requests.post(
-            f"{FISH_API_URL}/v1/tts",
-            data=packed,
-            headers={"Content-Type": "application/msgpack"},
+            f"{CHATTERBOX_API_URL}/v1/tts",
+            json=payload,
+            headers={"Content-Type": "application/json"},
         )
         resp.raise_for_status()
 
@@ -153,13 +148,13 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 500:
             raise RuntimeError(
-                f"FishSpeech server error - likely CUDA/GPU issue. Check container logs: {e}"
+                f"Chatterbox server error - likely CUDA/GPU issue. Check container logs: {e}"
             )
         else:
-            raise RuntimeError(f"FishSpeech API error ({e.response.status_code}): {e}")
+            raise RuntimeError(f"Chatterbox API error ({e.response.status_code}): {e}")
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
-            "Cannot connect to FishSpeech API. Ensure container is running on port 8080"
+            "Cannot connect to Chatterbox API. Ensure container is running on port 8080"
         )
     except Exception as e:
         raise RuntimeError(f"Voice cloning failed: {e}")
@@ -512,7 +507,6 @@ if __name__ == "__main__":
     load_env()
     initialize_session()
 
-    # Custom CSS for modern black/gray dark theme
     custom_css = """
     .gradio-container {
         background: #0a0a0a !important;

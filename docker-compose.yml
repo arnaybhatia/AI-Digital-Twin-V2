@@ -16,9 +16,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-  dia:
+  chatterbox:
     build: 
-      context: ./dia
+      context: ./chatterbox
     ports:
       - "8080:8080"
     volumes:
@@ -26,7 +26,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 8G
+          memory: 12G
         reservations:
           devices:
             - driver: nvidia
