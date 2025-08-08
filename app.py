@@ -126,11 +126,33 @@ def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
 
 
 def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
-    """Clone voice for a single sentence using Chatterbox"""
-    
+    """Clone voice for a single sentence using Chatterbox.
+
+    Ensures the audio_prompt_path is accessible from inside the Chatterbox container
+    by copying the provided source_wav into the repo's ./data directory (which is
+    volume-mounted to /app/data in the container), then sending that container path
+    in the API request.
+    """
+
+    # Prepare host/container paths for the audio prompt
+    project_root = os.path.abspath(os.path.dirname(__file__))
+    host_data_dir = os.path.join(project_root, "data")
+    os.makedirs(host_data_dir, exist_ok=True)
+
+    # Generate a unique filename to avoid races across concurrent requests
+    prompt_basename = f"voice_prompt_{uuid.uuid4().hex[:8]}.wav"
+    host_prompt_path = os.path.join(host_data_dir, prompt_basename)
+    container_prompt_path = f"/app/data/{prompt_basename}"
+
+    # Copy the source wav (likely in a temp dir) into the mounted data directory
+    try:
+        shutil.copy(source_wav, host_prompt_path)
+    except Exception as e:
+        raise RuntimeError(f"Failed to stage audio prompt for Chatterbox: {e}")
+
     payload = {
         "text": text,
-        "audio_prompt_path": source_wav
+        "audio_prompt_path": container_prompt_path,
     }
 
     try:
@@ -146,18 +168,34 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
         return out_wav
 
     except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 500:
+        if e.response is not None and e.response.status_code == 500:
             raise RuntimeError(
                 f"Chatterbox server error - likely CUDA/GPU issue. Check container logs: {e}"
             )
         else:
-            raise RuntimeError(f"Chatterbox API error ({e.response.status_code}): {e}")
+            status = e.response.status_code if e.response is not None else "unknown"
+            # Try to surface server-side JSON error if available
+            err_detail = None
+            try:
+                err_detail = e.response.json()
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"Chatterbox API error ({status}): {e}. Details: {err_detail}"
+            )
     except requests.exceptions.ConnectionError:
         raise RuntimeError(
             "Cannot connect to Chatterbox API. Ensure container is running on port 8080"
         )
     except Exception as e:
         raise RuntimeError(f"Voice cloning failed: {e}")
+    finally:
+        # Best-effort cleanup of the staged prompt file
+        try:
+            if os.path.exists(host_prompt_path):
+                os.remove(host_prompt_path)
+        except Exception:
+            pass
 
 
 def combine_audio_files(audio_files: list, output_path: str) -> str:
