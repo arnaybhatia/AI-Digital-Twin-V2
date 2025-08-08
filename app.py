@@ -499,8 +499,20 @@ def pipeline(
         progress(0.5, desc="🎤 Cloning voice...")
         yield (assistant_text, None, None, history)
 
-        cloned_wav = os.path.join(workdir, f"{uid}_clone.wav")
-        clone_voice(assistant_text, src_wav, cloned_wav)
+        # Clone voice to temp, then persist to results so it remains accessible
+        cloned_wav_tmp = os.path.join(workdir, f"{uid}_clone.wav")
+        clone_voice(assistant_text, src_wav, cloned_wav_tmp)
+
+        # Persist audio in results directory for playback and history
+        project_root = os.path.abspath(os.path.dirname(__file__))
+        results_dir = os.path.join(project_root, "results")
+        os.makedirs(results_dir, exist_ok=True)
+        cloned_wav = os.path.join(results_dir, f"audio_{uid}.wav")
+        try:
+            shutil.copy(cloned_wav_tmp, cloned_wav)
+        except Exception:
+            # If persisting fails, fallback to temp path (may be cleaned later)
+            cloned_wav = cloned_wav_tmp
 
         progress(0.7, desc="✅ Voice cloned")
         yield (assistant_text, cloned_wav, None, history)
@@ -754,8 +766,8 @@ if __name__ == "__main__":
 
                     gr.HTML('<div class="section-header">Generated Media</div>')
                     with gr.Row():
-                        audio_out = gr.Audio(label="Cloned Voice", type="filepath")
-                        video_out = gr.Video(label="Talking Avatar")
+                        audio_out = gr.Audio(label="Cloned Voice", type="filepath", streaming=True, autoplay=True)
+                        video_out = gr.Video(label="Talking Avatar", streaming=True, autoplay=True)
 
             # Right column - Generation History
             with gr.Column(scale=1, elem_classes="input-section"):
@@ -820,4 +832,6 @@ if __name__ == "__main__":
         )
 
 if __name__ == "__main__":
+    # Enable queue to ensure reliable streaming and long-running task handling
+    demo.queue()
     demo.launch(server_name="127.0.0.1")
