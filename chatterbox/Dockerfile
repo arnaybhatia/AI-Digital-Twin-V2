@@ -32,9 +32,6 @@ RUN python -m venv /app/venv
 # Activate virtual environment and upgrade pip
 RUN /app/venv/bin/python -m pip install --upgrade pip
 
-# Install PyTorch with CUDA support first
-RUN /app/venv/bin/pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-
 # Install Chatterbox TTS
 RUN /app/venv/bin/pip install chatterbox-tts
 
@@ -50,32 +47,86 @@ import os
 import tempfile
 import torch
 import torchaudio as ta
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, Response
 from chatterbox.tts import ChatterboxTTS
 
 app = Flask(__name__)
 
-# Automatically detect the best available device
-if torch.cuda.is_available():
-    device = "cuda"
-elif torch.backends.mps.is_available():
-    device = "mps"
-else:
+# Set CUDA environment variables before torch initialization
+os.environ['CUDA_VISIBLE_DEVICES'] = os.environ.get('CUDA_VISIBLE_DEVICES', '0')
+os.environ['NVIDIA_VISIBLE_DEVICES'] = os.environ.get('NVIDIA_VISIBLE_DEVICES', 'all')
+
+# Force CUDA initialization to happen properly
+try:
+    if torch.cuda.is_available():
+        torch.cuda.init()
+        device = "cuda"
+        print(f"CUDA is available. Using GPU: {torch.cuda.get_device_name(0)}")
+    else:
+        device = "cpu"
+        print("CUDA is not available. Using CPU.")
+except Exception as e:
+    print(f"CUDA initialization failed: {e}")
     device = "cpu"
+    print("Falling back to CPU.")
 
 print(f"Using device: {device}")
 
 # Initialize Chatterbox model
 print("Loading Chatterbox TTS model...")
-model = ChatterboxTTS.from_pretrained(device=device)
-print("Chatterbox model loaded successfully!")
+try:
+    model = ChatterboxTTS.from_pretrained(device=device)
+    print("Chatterbox model loaded successfully!")
+except Exception as e:
+    print(f"Error loading model: {e}")
+    print("Trying to load on CPU...")
+    device = "cpu"
+    model = ChatterboxTTS.from_pretrained(device=device)
+    print("Chatterbox model loaded successfully on CPU!")
+
+@app.route('/', methods=['GET'])
+def root():
+    return jsonify({
+        "service": "Chatterbox TTS API",
+        "version": "1.0",
+        "device": device,
+        "endpoints": {
+            "health": "/health",
+            "tts": "/v1/tts (POST)",
+            "api_info": "/v1"
+        }
+    })
+
+@app.route('/v1', methods=['GET'])
+def api_info():
+    return jsonify({
+        "service": "Chatterbox TTS API",
+        "version": "1.0",
+        "device": device,
+        "endpoints": {
+            "/v1/tts": {
+                "method": "POST",
+                "description": "Generate speech from text",
+                "parameters": {
+                    "text": "Text to convert to speech (required)",
+                    "audio_prompt_path": "Path to audio prompt file (optional, defaults to /app/data/speaker.wav)"
+                },
+                "example": {
+                    "text": "Hello world",
+                    "audio_prompt_path": "/app/data/speaker.wav"
+                }
+            }
+        }
+    })
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({
         "status": "healthy", 
         "device": device,
-        "service": "chatterbox-tts"
+        "service": "chatterbox-tts",
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0
     })
 
 @app.route('/v1/tts', methods=['POST'])
@@ -84,12 +135,24 @@ def generate_speech():
         print(f"Received request: {request.method} {request.url}")
         print(f"Content-Type: {request.content_type}")
         
+        # Validate request content type
+        if not request.is_json and not request.form:
+            return jsonify({
+                "error": "Invalid content type. Use application/json or form data.",
+                "example": {"text": "Hello world", "audio_prompt_path": "/app/data/speaker.wav"}
+            }), 400
+        
         # Handle both JSON and form data
         if request.is_json:
             data = request.json
             print(f"JSON data: {data}")
-            text = data.get('text', '') if data else ''
-            audio_prompt_path = data.get('audio_prompt_path', '') if data else ''
+            if not data:
+                return jsonify({
+                    "error": "Invalid JSON data",
+                    "example": {"text": "Hello world", "audio_prompt_path": "/app/data/speaker.wav"}
+                }), 400
+            text = data.get('text', '')
+            audio_prompt_path = data.get('audio_prompt_path', '')
         else:
             print(f"Form data: {request.form}")
             text = request.form.get('text', '')
@@ -98,9 +161,11 @@ def generate_speech():
         print(f"Text: {text}")
         print(f"Audio prompt path: {audio_prompt_path}")
         
-        if not text:
-            print("Error: No text provided")
-            return jsonify({"error": "No text provided"}), 400
+        if not text or not text.strip():
+            return jsonify({
+                "error": "Text parameter is required and cannot be empty",
+                "example": {"text": "Hello world", "audio_prompt_path": "/app/data/speaker.wav"}
+            }), 400
         
         # For compatibility with existing code, look for audio file in data directory
         if not audio_prompt_path:
@@ -117,8 +182,11 @@ def generate_speech():
                         break
         
         if not audio_prompt_path or not os.path.exists(audio_prompt_path):
-            print(f"Error: Audio prompt file not found: {audio_prompt_path}")
-            return jsonify({"error": f"Audio prompt file not found: {audio_prompt_path}"}), 400
+            return jsonify({
+                "error": f"Audio prompt file not found: {audio_prompt_path}",
+                "available_files": [f for f in os.listdir("/app/data") if f.endswith(('.wav', '.mp3', '.flac'))] if os.path.exists("/app/data") else [],
+                "suggestion": "Place an audio file (speaker.wav or trainingaudio.wav) in /app/data/ or specify audio_prompt_path"
+            }), 400
         
         print(f"Generating speech for text: {text[:50]}...")
         print(f"Using audio prompt: {audio_prompt_path}")
@@ -139,7 +207,6 @@ def generate_speech():
             os.unlink(tmp_file.name)
             
             # Return audio data directly
-            from flask import Response
             return Response(
                 audio_data,
                 mimetype='audio/wav',
@@ -150,10 +217,24 @@ def generate_speech():
         print(f"Error generating speech: {str(e)}")
         import traceback
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({
+            "error": str(e),
+            "type": type(e).__name__
+        }), 500
+
+@app.route('/v1/tts', methods=['GET'])
+def tts_get_info():
+    return jsonify({
+        "error": "Method not allowed. Use POST to generate speech.",
+        "method": "POST",
+        "example": {
+            "text": "Hello world",
+            "audio_prompt_path": "/app/data/speaker.wav"
+        }
+    }), 405
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False)
 EOF
 
 # Expose port for Chatterbox API

@@ -1,6 +1,7 @@
 services:
   sadtalker:
     build: ./sadtalker
+    image: strifedeeno/ai-digital-twin-v2:sadtalker
     ports:
       - "7861:7860"
     volumes:
@@ -19,10 +20,13 @@ services:
   chatterbox:
     build: 
       context: ./chatterbox
+    image: strifedeeno/ai-digital-twin-v2:chatterbox
     ports:
       - "8080:8080"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
     deploy:
       resources:
         limits:
