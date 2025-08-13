@@ -341,7 +341,6 @@ def sadtalker_animate(
         "docker",
         "compose",
         "exec",
-        "-T",
         "sadtalker",
         "python",
         "inference.py",
@@ -354,6 +353,7 @@ def sadtalker_animate(
         "--preprocess",
         "full",
         "--still",
+        "--verbose",
     ]
     res = subprocess.run(
         cmd, cwd=project_root, check=True, capture_output=True, text=True
