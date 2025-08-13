@@ -1,15 +1,17 @@
 # AI Digital Twin V2
 
-Create personalized talking avatars with AI-powered voice cloning and facial animation.
+Create personalized talking avatars with AI-powered voice cloning and facial animation. This project combines multiple AI technologies to generate realistic talking avatars from a single portrait image, voice sample, and text input.
 
 ## Features
 
-- **AI-Powered Conversations** - Generate responses using TMPT AI or use raw text input
-- **Voice Cloning** - Clone any voice using FishSpeech technology
-- **Facial Animation** - Animate still images with SadTalker
-- **Modern Web Interface** - Clean, dark-themed Gradio interface
-- **Progressive Output** - See results as each stage completes
-- **Dockerized Services** - Complete containerized setup with GPU support
+- **AI-Powered Conversations** - Generate intelligent responses using TMPT AI or use custom text input
+- **Advanced Voice Cloning** - Clone any voice using FishSpeech (Chatterbox) with sentence-level batching
+- **Facial Animation** - Animate portrait images with SadTalker for realistic lip-sync and expressions
+- **Modern Web Interface** - Clean, responsive Gradio interface with real-time progress tracking
+- **Progressive Output** - Watch results generate step-by-step: AI response → cloned voice → animated video
+- **Generation History** - Track and review your previous digital twin creations
+- **Dockerized Services** - Complete containerized setup with GPU acceleration support
+- **Robust Pipeline** - Handles long texts with intelligent sentence splitting and audio concatenation
 
 ## Requirements
 
@@ -76,23 +78,51 @@ docker compose up -d --build
 
 ```
 AI-Digital-Twin-V2/
-├── app.py                 # Main Gradio application
-├── docker-compose.yml     # Service orchestration
-├── fishspeech/           # FishSpeech voice cloning service
-│   └── Dockerfile
+├── app.py                 # Main Gradio application (838 lines)
+│                         # - Pipeline orchestration
+│                         # - TMPT API integration
+│                         # - Voice cloning coordination
+│                         # - SadTalker animation calls
+│                         # - Progressive UI updates
+├── docker-compose.yml     # Service orchestration with GPU support
+├── chatterbox/           # FishSpeech voice cloning service
+│   └── Dockerfile        # - Containerized voice cloning API
+│                         # - Runs on port 8080
 ├── sadtalker/            # SadTalker facial animation service
-│   ├── Dockerfile
-│   └── server.py
-├── data/                 # Temporary data (auto-cleaned)
-├── results/              # Generated videos
-└── .env                  # API keys (create this)
+│   ├── Dockerfile        # - Containerized animation service
+│   └── server.py         # - Model checking and service management
+│                         # - Runs on port 7861
+├── data/                 # Temporary data directory (volume mounted)
+│                         # - Input files processing
+│                         # - Auto-cleanup after processing
+├── results/              # Generated video outputs
+├── training_audio/       # Audio training samples
+├── test.py               # Voice cloning testing script
+└── .env                  # API keys configuration (create this)
 ```
 
-## Services
+## Architecture & Pipeline
 
-- **FishSpeech** (Port 8080) - Voice cloning API service
-- **SadTalker** (Port 7861) - Facial animation service  
-- **Main App** - Gradio web interface (run locally)
+### Core Services
+- **Chatterbox/FishSpeech** (Port 8080) - Voice cloning API service with GPU acceleration
+- **SadTalker** (Port 7861) - Facial animation service with model validation
+- **Main App** (app.py) - Gradio web interface with pipeline orchestration
+
+### Processing Pipeline
+1. **Input Processing**: User provides text, voice sample, portrait image, and driving video
+2. **AI Response Generation** (Optional): TMPT API generates intelligent responses
+3. **Text Processing**: Long texts are split into sentences with token limits (~150 tokens)
+4. **Voice Cloning**: Each sentence is processed through FishSpeech with batching
+5. **Audio Concatenation**: Individual sentence audio files are combined using FFmpeg
+6. **Facial Animation**: SadTalker animates the portrait using the cloned voice and driving video
+7. **Progressive Output**: Results are streamed to the UI as each stage completes
+
+### Technical Features
+- **Sentence-level Batching**: Handles long texts by processing sentences individually
+- **GPU Memory Management**: Optimized resource allocation across services
+- **Volume Mounting**: Shared data directories between containers and host
+- **Error Handling**: Robust error handling with fallback mechanisms
+- **Generation History**: Persistent tracking of user generations with metadata
 
 ## Troubleshooting
 
@@ -106,3 +136,40 @@ AI-Digital-Twin-V2/
 - **Memory**: 12GB+ VRAM recommended
 - **CUDA**: Compatible with CUDA 12.x
 - **Driver**: Latest NVIDIA drivers with Docker GPU support
+- **Docker**: NVIDIA Container Toolkit for GPU access in containers
+
+## Development & Testing
+
+### Testing Voice Cloning
+Use the included `test.py` script to test voice cloning functionality:
+```bash
+python test.py
+```
+
+### Service Health Checks
+- **SadTalker**: Check model availability and service status
+- **Chatterbox**: Verify FishSpeech API responsiveness
+- **GPU Access**: Ensure containers can access GPU resources
+
+### Local Development
+Run the main application locally without Docker:
+```bash
+# Ensure services are running via Docker Compose
+docker compose up -d
+
+# Run the Gradio interface locally
+python app.py
+```
+
+### Container Management
+```bash
+# View service logs
+docker compose logs sadtalker
+docker compose logs chatterbox
+
+# Restart specific service
+docker compose restart sadtalker
+
+# Check GPU access in container
+docker compose exec chatterbox nvidia-smi
+```
