@@ -1,6 +1,7 @@
 services:
   sadtalker:
     build: ./sadtalker
+    image: strifedeeno/ai-digital-twin-v2:sadtalker
     ports:
       - "7861:7860"
     volumes:
@@ -16,17 +17,16 @@ services:
               count: 1
               capabilities: [gpu]
 
-  fishspeech:
+  chatterbox:
     build: 
-      context: ./fishspeech
-      args:
-        HUGGING_FACE_HUB_TOKEN: ${HUGGING_FACE_HUB_TOKEN}
-    env_file:
-      - .env
+      context: ./chatterbox
+    image: strifedeeno/ai-digital-twin-v2:chatterbox
     ports:
       - "8080:8080"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
     deploy:
       resources:
         limits:
