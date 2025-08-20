@@ -1,11 +1,13 @@
-# AI Digital Twin V2
+# AI Digital Twin V2 (multilingual-unstable)
+
+Experimental multilingual branch. Expect breaking changes and instability while we integrate Zonos TTS for multi-language support.
 
 Create personalized talking avatars with AI-powered voice cloning and facial animation. This project combines multiple AI technologies to generate realistic talking avatars from a single portrait image, voice sample, and text input.
 
 ## Features
 
 - **AI-Powered Conversations** - Generate intelligent responses using TMPT AI or use custom text input
-- **Advanced Voice Cloning** - Clone any voice using Chatterbox TTS with sentence-level batching and lazy loading
+- **Advanced Voice Cloning** - Clone any voice using Zonos TTS (experimental multilingual) with sentence-level batching and lazy loading
 - **Facial Animation** - Animate portrait images with SadTalker for realistic lip-sync and expressions
 - **Modern Web Interface** - Clean, responsive Gradio interface with real-time progress tracking
 - **Progressive Output** - Watch results generate step-by-step: AI response → cloned voice → animated video
@@ -32,7 +34,7 @@ cd AI-Digital-Twin-V2
 2. **Create a `.env` file** in the project root with your API keys:
 ```env
 TMPT_API_KEY=your_tmpt_api_key_here
-CHATTERBOX_API_URL=http://localhost:8080
+ZONOS_API_URL=http://localhost:8090
 ```
 
 3. **Start the services:**
@@ -43,7 +45,7 @@ docker compose up -d --build
 4. **Access the application:**
    - Run the main app: `python app.py` (opens at `http://127.0.0.1:7860`)
    - SadTalker service: `http://localhost:7861`
-   - Chatterbox TTS API: `http://localhost:8080`
+   - Zonos TTS container: use docker compose exec to run `zonos_generate.py`
 
 ## API Keys Setup
 
@@ -52,10 +54,14 @@ docker compose up -d --build
 2. Generate an API key from your dashboard
 3. Add it to your `.env` file as `TMPT_API_KEY`
 
-### Chatterbox API URL (Optional)
-1. Default: `http://localhost:8080`
-2. Modify in `.env` file if running on different host/port
-3. Used for voice cloning service communication
+### Zonos TTS (Experimental)
+- Runs as a container that you exec into for generation.
+- No HTTP API exposed by default in this branch.
+- Example:
+```bash
+docker compose exec zonos python zonos_generate.py --text "Hola mundo" --speaker_audio /app/data/speaker.wav --output /app/data/out.wav --language es-es
+```
+
 
 ## Usage
 
@@ -105,7 +111,7 @@ AI-Digital-Twin-V2/
 ## Architecture & Pipeline
 
 ### Core Services
-- **Chatterbox TTS** (Port 8080) - Voice cloning API service with GPU acceleration and lazy loading
+- **Zonos TTS** (Container exec) - Voice cloning via Zonos CLI, experimental multilingual
 - **SadTalker** (Port 7861) - Facial animation service with model validation
 - **Main App** (app.py) - Gradio web interface with pipeline orchestration
 
@@ -143,21 +149,21 @@ AI-Digital-Twin-V2/
 ## Development & Testing
 
 ### Testing Voice Cloning
-Test the Chatterbox TTS API directly:
+Test Zonos generation inside the container:
 ```bash
-# Check service health
-curl http://localhost:8080/health
-
-# Test TTS generation
-curl -X POST http://localhost:8080/v1/tts \
-  -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "audio_prompt_path": "/app/data/speaker.wav"}' \
-  --output test_output.wav
+# Generate Spanish speech using speaker reference
+cp data/speaker.wav data/ref.wav
+docker compose exec zonos python zonos_generate.py \
+  --text "Hola mundo" \
+  --speaker_audio /app/data/ref.wav \
+  --output /app/data/test_output.wav \
+  --language es-es
+ls -l data/test_output.wav
 ```
 
 ### Service Health Checks
 - **SadTalker**: Check model availability and service status
-- **Chatterbox**: Verify TTS API responsiveness at `/health` endpoint
+- **Zonos**: Verify you can exec into container and run `zonos_generate.py`
 - **GPU Access**: Ensure containers can access GPU resources
 
 ### Local Development
@@ -174,7 +180,7 @@ python app.py
 ```bash
 # View service logs
 docker compose logs sadtalker
-docker compose logs chatterbox
+docker compose logs zonos
 
 # Restart specific service
 docker compose restart sadtalker

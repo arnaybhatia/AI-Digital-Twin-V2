@@ -11,16 +11,16 @@ import gradio as gr
 
 # ——— Environment ———
 API_KEY = None
-CHATTERBOX_API_URL = None
+ZONOS_API_URL = None
 
 
 def load_env():
     load_dotenv()
-    global API_KEY, CHATTERBOX_API_URL
+    global API_KEY, ZONOS_API_URL
     API_KEY = os.getenv("TMPT_API_KEY")
     if not API_KEY:
         raise RuntimeError("TMPT_API_KEY not found in .env")
-    CHATTERBOX_API_URL = os.getenv("CHATTERBOX_API_URL", "http://localhost:8080")
+    ZONOS_API_URL = os.getenv("ZONOS_API_URL", "http://localhost:8090")
 
 
 # ——— TMPT client ———
@@ -125,75 +125,53 @@ def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
     return final_sentences
 
 
-def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
-    """Clone voice for a single sentence using Chatterbox.
+def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str = "en-us") -> str:
+    """Clone voice for a single sentence using Zonos via container exec.
 
-    Ensures the audio_prompt_path is accessible from inside the Chatterbox container
-    by copying the provided source_wav into the repo's ./data directory (which is
-    volume-mounted to /app/data in the container), then sending that container path
-    in the API request.
+    We stage the source_wav into ./data (mounted to /app/data in zonos container)
+    and call a helper script inside the zonos image to produce the output wav.
     """
 
-    # Prepare host/container paths for the audio prompt
     project_root = os.path.abspath(os.path.dirname(__file__))
     host_data_dir = os.path.join(project_root, "data")
     os.makedirs(host_data_dir, exist_ok=True)
 
-    # Generate a unique filename to avoid races across concurrent requests
     prompt_basename = f"voice_prompt_{uuid.uuid4().hex[:8]}.wav"
     host_prompt_path = os.path.join(host_data_dir, prompt_basename)
     container_prompt_path = f"/app/data/{prompt_basename}"
 
-    # Copy the source wav (likely in a temp dir) into the mounted data directory
     try:
         shutil.copy(source_wav, host_prompt_path)
     except Exception as e:
-        raise RuntimeError(f"Failed to stage audio prompt for Chatterbox: {e}")
+        raise RuntimeError(f"Failed to stage audio prompt for Zonos: {e}")
 
-    payload = {
-        "text": text,
-        "audio_prompt_path": container_prompt_path,
-    }
+    # Output staging
+    out_basename = f"tts_{uuid.uuid4().hex[:8]}.wav"
+    host_out_path = os.path.join(host_data_dir, out_basename)
+    container_out_path = f"/app/data/{out_basename}"
+
+    cmd = [
+        "docker", "compose", "exec", "zonos", "python", "zonos_generate.py",
+        "--text", text,
+        "--output", container_out_path,
+        "--speaker_audio", container_prompt_path,
+        "--language", language,
+    ]
 
     try:
-        resp = requests.post(
-            f"{CHATTERBOX_API_URL}/v1/tts",
-            json=payload,
-            headers={"Content-Type": "application/json"},
-        )
-        resp.raise_for_status()
-
-        with open(out_wav, "wb") as out:
-            out.write(resp.content)
+        subprocess.run(cmd, cwd=project_root, check=True, capture_output=True)
+        shutil.move(host_out_path, out_wav)
         return out_wav
-
-    except requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 500:
-            raise RuntimeError(
-                f"Chatterbox server error - likely CUDA/GPU issue. Check container logs: {e}"
-            )
-        else:
-            status = e.response.status_code if e.response is not None else "unknown"
-            # Try to surface server-side JSON error if available
-            err_detail = None
-            try:
-                err_detail = e.response.json()
-            except Exception:
-                pass
-            raise RuntimeError(
-                f"Chatterbox API error ({status}): {e}. Details: {err_detail}"
-            )
-    except requests.exceptions.ConnectionError:
-        raise RuntimeError(
-            "Cannot connect to Chatterbox API. Ensure container is running on port 8080"
-        )
-    except Exception as e:
-        raise RuntimeError(f"Voice cloning failed: {e}")
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode() if isinstance(e.stderr, (bytes, bytearray)) else str(e.stderr)
+        raise RuntimeError(f"Zonos generation failed: {stderr}")
     finally:
-        # Best-effort cleanup of the staged prompt file
         try:
             if os.path.exists(host_prompt_path):
                 os.remove(host_prompt_path)
+            # keep host_out_path if moved; otherwise cleanup
+            if os.path.exists(host_out_path):
+                os.remove(host_out_path)
         except Exception:
             pass
 
@@ -260,7 +238,7 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             pass
 
 
-def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
+def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us") -> str:
     """Clone voice with sentence batching using dedicated temp directory"""
     # Create dedicated temp directory for this operation
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -278,7 +256,7 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
 
         if len(sentences) == 1:
             # Single sentence, process directly to output
-            return clone_voice_sentence(text, source_wav, out_wav)
+            return clone_voice_sentence(text, source_wav, out_wav, language)
 
         # Multiple sentences, batch process in temp directory
         temp_audio_files = []
@@ -288,7 +266,7 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
                 continue
 
             temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
-            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path)
+            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path, language)
             temp_audio_files.append(temp_audio_path)
 
         if not temp_audio_files:
@@ -314,8 +292,8 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
             )
 
 
-def clone_voice(text: str, src_wav: str, out_wav: str) -> str:
-    return clone_voice_docker(text, src_wav, out_wav)
+def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us") -> str:
+    return clone_voice_docker(text, src_wav, out_wav, language)
 
 
 # ——— SadTalker animation ———
@@ -446,6 +424,7 @@ def pipeline(
     image_file,
     video_file,
     use_ai: bool,
+    language: str,
     history: list,
     progress=gr.Progress(),
 ):
@@ -501,7 +480,7 @@ def pipeline(
 
         # Clone voice to temp, then persist to results so it remains accessible
         cloned_wav_tmp = os.path.join(workdir, f"{uid}_clone.wav")
-        clone_voice(assistant_text, src_wav, cloned_wav_tmp)
+        clone_voice(assistant_text, src_wav, cloned_wav_tmp, language)
 
         # Persist audio in results directory for playback and history
         project_root = os.path.abspath(os.path.dirname(__file__))
@@ -571,6 +550,11 @@ if __name__ == "__main__":
             with gr.Column():
                 text = gr.Textbox(label="Text (optional)", placeholder="Type text or leave blank to only clone voice from prompt + audio.", lines=3)
                 use_ai = gr.Checkbox(label="Ask AI JimTwin.", value=True)
+                language = gr.Dropdown(
+                    label="Language",
+                    choices=[("English", "en-us"), ("Japanese", "ja-jp"), ("Chinese", "zh-cn"), ("French", "fr-fr"), ("German", "de-de")],
+                    value="en-us"
+                )
                 voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
                 image = gr.Image(label="Portrait Image", type="filepath")
                 video = gr.Video(label="Driving Video", format="mp4")
@@ -598,10 +582,10 @@ if __name__ == "__main__":
             f3 = _F(vid_path)
             return txt or "", f1, f2, f3
 
-        def _run(txt, v_path, img_path, vid_path, use_ai_flag, hist, progress=gr.Progress()):
+        def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, hist, progress=gr.Progress()):
             # Stream steps using existing pipeline generator
             txt, vf, imf, vif = _validate_inputs(txt, v_path, img_path, vid_path)
-            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, hist, progress):
+            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, hist, progress):
                 yield api_resp, a_out, v_out, hist_out
 
         def _clear():
@@ -619,7 +603,7 @@ if __name__ == "__main__":
 
         generate.click(
             fn=_run,
-            inputs=[text, voice, image, video, use_ai, state],
+            inputs=[text, voice, image, video, use_ai, language, state],
             outputs=[api_out, audio_out, video_out, state],
         ).then(fn=_refresh, inputs=[state], outputs=[history_md])
 

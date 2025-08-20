@@ -17,16 +17,17 @@ services:
               count: 1
               capabilities: [gpu]
 
-  chatterbox:
-    build: 
-      context: ./chatterbox
-    image: strifedeeno/ai-digital-twin-v2:chatterbox
+  zonos:
+    build:
+      context: ./zonos
+    image: strifedeeno/ai-digital-twin-v2:zonos
     ports:
-      - "8080:8080"
+      - "8090:8090"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - HF_HOME=/root/.cache/huggingface
     deploy:
       resources:
         limits:
