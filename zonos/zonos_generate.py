@@ -8,11 +8,11 @@ from zonos.model import Zonos
 from zonos.conditioning import make_cond_dict
 from zonos.utils import DEFAULT_DEVICE as device
 
-def generate_speech(text, output_path, speaker_audio=None, model_name="transformer", language="en-us"):
+def generate_speech(text, output_path, speaker_audio=None, model_name="hybrid", language="en-us"):
     """Generate speech using Zonos TTS engine with proper voice cloning"""
     print(f"Generating speech for text: '{text}'")
     try:
-        # Load the model - use transformer model which generally gives better results
+        # Load the model - hybrid model offers a good balance of speed and quality
         print(f"Loading Zonos {model_name} model on device: {device}")
         model_path = f"Zyphra/Zonos-v0.1-{model_name}"
         # Load model - it should use the cache automatically if available
@@ -83,7 +83,7 @@ if __name__ == "__main__":
     parser.add_argument('--text', required=True, help='Text to convert to speech')
     parser.add_argument('--output', required=True, help='Output audio file path')
     parser.add_argument('--speaker_audio', help='Path to speaker reference audio file')
-    parser.add_argument('--model', default='transformer', choices=['transformer', 'hybrid'], help='Model to use (transformer or hybrid)')
+    parser.add_argument('--model', default='hybrid', choices=['transformer', 'hybrid'], help='Model to use (transformer or hybrid)')
     parser.add_argument('--language', default='en-us', help='BCP-47 language tag like en-us, es-es, fr-fr')
     
     args = parser.parse_args()

@@ -53,16 +53,43 @@ def initialize_session():
     CLIENT_TOKEN = tok["client_token_id"]
     th = make_request("POST", "/threads", json={"client_token_id": CLIENT_TOKEN})
     THREAD_ID = th["id"]
+    
+    # Set initial system context for natural, expressive responses
+    system_prompt = """You are JimTwin, a friendly and expressive AI assistant. 
+    Always maintain a natural, conversational tone with appropriate emotions and expressiveness. 
+    Avoid monotone or overly formal responses. Be engaging and personable in your communication style."""
+    
+    try:
+        make_request(
+            "POST",
+            f"/threads/{THREAD_ID}/messages",
+            json={"client_token_id": CLIENT_TOKEN, "text": system_prompt, "role": "system"},
+        )
+    except:
+        # If system messages aren't supported, send as first user message
+        pass
 
 
-def get_response(user_input: str) -> str:
+def get_response(user_input: str, language: str = "en-us") -> str:
     if CLIENT_TOKEN is None or THREAD_ID is None:
         initialize_session()
 
+    # Add language instruction to the user input with better prompting
+    language_prompts = {
+        "en-us": "",  # No additional prompt for English
+        "ja-jp": "Respond naturally in Japanese, maintaining a conversational and expressive tone: ",
+        "zh-cn": "Respond naturally in Chinese, maintaining a conversational and expressive tone: ",
+        "fr-fr": "Respond naturally in French, maintaining a conversational and expressive tone: ",
+        "de-de": "Respond naturally in German, maintaining a conversational and expressive tone: "
+    }
+    
+    language_prompt = language_prompts.get(language, "")
+    enhanced_input = language_prompt + user_input
+    
     msg = make_request(
         "POST",
         f"/threads/{THREAD_ID}/messages",
-        json={"client_token_id": CLIENT_TOKEN, "text": user_input},
+        json={"client_token_id": CLIENT_TOKEN, "text": enhanced_input},
     )
     message_id = msg["id"]
 
@@ -467,7 +494,7 @@ def pipeline(
         )
 
         if use_ai:
-            assistant_text = get_response(user_text)
+            assistant_text = get_response(user_text, language)
         else:
             assistant_text = user_text
 
