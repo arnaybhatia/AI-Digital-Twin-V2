@@ -552,286 +552,76 @@ def pipeline(
             pass
 
 
-# ——— Gradio UI ———
+# ——— Gradio UI (simplified and robust) ———
 if __name__ == "__main__":
     load_env()
     initialize_session()
 
-    custom_css = """
-    .gradio-container {
-        background: #0a0a0a !important;
-        color: #e0e0e0 !important;
-    }
-    
-    /* Text inputs */
-    .gr-textbox, .gr-textbox textarea {
-        background: #1a1a1a !important;
-        border: 1px solid #404040 !important;
-        color: #e0e0e0 !important;
-        border-radius: 6px !important;
-    }
-    
-    .gr-textbox:focus, .gr-textbox textarea:focus {
-        border-color: #606060 !important;
-        box-shadow: 0 0 0 2px rgba(96, 96, 96, 0.2) !important;
-    }
-    
-    /* File inputs */
-    .file-upload {
-        background: #1a1a1a !important;
-        border: 1px solid #404040 !important;
-        border-radius: 6px !important;
-    }
-    
-    /* Buttons */
-    .gr-button {
-        background: #2a2a2a !important;
-        border: 1px solid #505050 !important;
-        color: #e0e0e0 !important;
-        border-radius: 6px !important;
-        font-weight: 500 !important;
-    }
-    
-    .gr-button:hover {
-        background: #353535 !important;
-        border-color: #606060 !important;
-    }
-    
-    .generate-btn {
-        background: #1f1f1f !important;
-        border: 1px solid #505050 !important;
-        color: #ffffff !important;
-        font-weight: 600 !important;
-        font-size: 16px !important;
-        padding: 12px 24px !important;
-        border-radius: 6px !important;
-        transition: all 0.2s ease !important;
-    }
-    
-    .generate-btn:hover {
-        background: #2a2a2a !important;
-        border-color: #707070 !important;
-    }
-    
-    /* Checkbox */
-    .gr-checkbox {
-        background: #1a1a1a !important;
-    }
-    
-    /* Audio/Video components */
-    .gr-audio, .gr-video {
-        background: #1a1a1a !important;
-        border: 1px solid #404040 !important;
-        border-radius: 6px !important;
-    }
-    
-    /* Labels */
-    .gr-label {
-        color: #c0c0c0 !important;
-        font-weight: 500 !important;
-    }
-    
-    /* Sections */
-    .input-section {
-        background: #121212 !important;
-        border: 1px solid #303030 !important;
-        border-radius: 8px;
-        padding: 24px;
-        margin: 16px 0;
-    }
-    
-    .output-section {
-        background: #121212 !important;
-        border: 1px solid #303030 !important;
-        border-radius: 8px;
-        padding: 24px;
-        margin: 16px 0;
-    }
-    
-    .toggle-container {
-        background: #1a1a1a !important;
-        border: 1px solid #404040 !important;
-        border-radius: 6px;
-        padding: 16px;
-    }
-    
-    /* Headers */
-    .main-header {
-        text-align: center;
-        color: #ffffff;
-        font-size: 32px;
-        font-weight: 700;
-        margin-bottom: 8px;
-        letter-spacing: -0.5px;
-    }
-    
-    .section-header {
-        color: #d0d0d0;
-        font-size: 18px;
-        font-weight: 600;
-        margin: 0 0 16px 0;
-        border-bottom: 1px solid #303030;
-        padding-bottom: 8px;
-    }
-    
-    .description {
-        text-align: center;
-        color: #909090;
-        font-size: 14px;
-        margin-bottom: 32px;
-        line-height: 1.4;
-    }
-    
-    .progress-info {
-        text-align: center;
-        color: #808080;
-        font-size: 13px;
-        margin: 16px 0;
-        font-style: italic;
-    }
-    """
-
-    demo = gr.Blocks(
-        theme=gr.themes.Base(
-            primary_hue="neutral", secondary_hue="neutral", neutral_hue="zinc"
-        ).set(
-            body_background_fill="#0a0a0a",
-            block_background_fill="#121212",
-            border_color_primary="#303030",
-            input_background_fill="#1a1a1a",
-            button_primary_background_fill="#2a2a2a",
-        ),
-        css=custom_css,
-        title="AI Digital Twin V2",
-    )
+    demo = gr.Blocks(title="AI Digital Twin V2 (Simple)")
 
     with demo:
-        # State for generation history
-        history_state = gr.State([])
+        state = gr.State([])
 
-        gr.HTML('<div class="main-header">AI Digital Twin V2</div>')
-        gr.HTML(
-            '<div class="description">Create personalized talking avatars with AI-powered voice cloning and facial animation</div>'
-        )
+        gr.Markdown("""
+        # AI Digital Twin V2
+        Provide three files and optional text. Click Generate.
+        """)
 
         with gr.Row():
-            # Left column - Input and Output
-            with gr.Column(scale=2):
-                with gr.Column(elem_classes="input-section"):
-                    gr.HTML('<div class="section-header">Input Configuration</div>')
+            with gr.Column():
+                text = gr.Textbox(label="Text (optional)", placeholder="Type text or leave blank to only clone voice from prompt + audio.", lines=3)
+                use_ai = gr.Checkbox(label="Ask AI JimTwin.", value=True)
+                voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
+                image = gr.Image(label="Portrait Image", type="filepath")
+                video = gr.Video(label="Driving Video", format="mp4")
+                generate = gr.Button("Generate")
+                clear = gr.Button("Clear")
+            with gr.Column():
+                api_out = gr.Textbox(label="Response", interactive=False)
+                audio_out = gr.Audio(label="Cloned Voice", type="filepath")
+                video_out = gr.Video(label="Talking Avatar")
+                history_md = gr.Markdown("No generations yet.")
 
-                    with gr.Row():
-                        with gr.Column(scale=3):
-                            txt = gr.Textbox(
-                                lines=3,
-                                placeholder="Enter your message or prompt here...",
-                                label="Text Input",
-                                container=True,
-                            )
-                        with gr.Column(scale=1, elem_classes="toggle-container"):
-                            use_ai_toggle = gr.Checkbox(
-                                label="Use AI Response",
-                                value=True,
-                                info="Toggle between AI generation and raw text",
-                            )
+        def _validate_inputs(txt, v_path, img_path, vid_path):
+            if not v_path:
+                raise gr.Error("Voice sample is required.")
+            if not img_path:
+                raise gr.Error("Portrait image is required.")
+            if not vid_path:
+                raise gr.Error("Driving video is required.")
+            # Coerce to expected objects mimicking gradio File-like for pipeline
+            class _F:
+                def __init__(self, name: str):
+                    self.name = name
+            f1 = _F(v_path)
+            f2 = _F(img_path)
+            f3 = _F(vid_path)
+            return txt or "", f1, f2, f3
 
-                    gr.HTML('<div class="section-header">Media Files</div>')
-                    with gr.Row():
-                        voice = gr.File(
-                            label="Voice Sample", file_types=["audio"], height=100
-                        )
-                        img = gr.File(
-                            label="Portrait Image", file_types=["image"], height=100
-                        )
-                        vid = gr.File(
-                            label="Driving Video", file_types=["video"], height=100
-                        )
+        def _run(txt, v_path, img_path, vid_path, use_ai_flag, hist, progress=gr.Progress()):
+            # Stream steps using existing pipeline generator
+            txt, vf, imf, vif = _validate_inputs(txt, v_path, img_path, vid_path)
+            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, hist, progress):
+                yield api_resp, a_out, v_out, hist_out
 
-                with gr.Row():
-                    btn = gr.Button(
-                        "Generate Digital Twin",
-                        variant="primary",
-                        size="lg",
-                        elem_classes="generate-btn",
-                    )
-                    clear_btn = gr.Button(
-                        "Clear Outputs", variant="secondary", size="lg"
-                    )
-
-                with gr.Column(elem_classes="output-section"):
-                    gr.HTML('<div class="section-header">Generated Response</div>')
-                    api_response = gr.Textbox(
-                        label="AI Response", interactive=False, lines=3
-                    )
-
-                    gr.HTML('<div class="section-header">Generated Media</div>')
-                    with gr.Row():
-                        audio_out = gr.Audio(label="Cloned Voice", type="filepath", streaming=True, autoplay=True)
-                        video_out = gr.Video(label="Talking Avatar", streaming=True, autoplay=True)
-
-            # Right column - Generation History
-            with gr.Column(scale=1, elem_classes="input-section"):
-                gr.HTML('<div class="section-header">Generation History</div>')
-
-                def format_history(history):
-                    if not history:
-                        return "No generations yet. Create your first digital twin!"
-
-                    formatted = ""
-                    for i, entry in enumerate(reversed(history[-5:])):  # Show last 5
-                        formatted += f"""
-                        **#{len(history) - i} - {entry["timestamp"]}**
-                        - **Input:** {entry["input"][:50]}{"..." if len(entry["input"]) > 50 else ""}
-                        - **Mode:** {entry["mode"]}
-                        - **Response:** {entry["response"][:100]}{"..." if len(entry["response"]) > 100 else ""}
-                        
-                        ---
-                        """
-                    return formatted
-
-                history_display = gr.Markdown(
-                    value="No generations yet. Create your first digital twin!",
-                    label="Recent Generations",
-                )
-
-                # History controls
-                with gr.Row():
-                    refresh_history_btn = gr.Button("🔄 Refresh", size="sm")
-                    clear_history_btn = gr.Button("🗑️ Clear History", size="sm")
-
-        def clear_outputs():
+        def _clear():
             return "", None, None
 
-        def clear_history():
-            return [], "No generations yet. Create your first digital twin!"
+        def _refresh(history):
+            if not history:
+                return "No generations yet."
+            lines = []
+            for h in history[-5:]:
+                lines.append(f"- {h['timestamp']} | {h['mode']} | {h['input'][:50]}{'...' if len(h['input'])>50 else ''}")
+            return "\n".join(lines)
 
-        def refresh_history_display(history):
-            return format_history(history)
+        clear.click(fn=_clear, outputs=[api_out, audio_out, video_out])
 
-        # Event handlers
-        clear_btn.click(fn=clear_outputs, outputs=[api_response, audio_out, video_out])
+        generate.click(
+            fn=_run,
+            inputs=[text, voice, image, video, use_ai, state],
+            outputs=[api_out, audio_out, video_out, state],
+        ).then(fn=_refresh, inputs=[state], outputs=[history_md])
 
-        clear_history_btn.click(
-            fn=clear_history, outputs=[history_state, history_display]
-        )
-
-        refresh_history_btn.click(
-            fn=refresh_history_display,
-            inputs=[history_state],
-            outputs=[history_display],
-        )
-
-        btn.click(
-            fn=pipeline,
-            inputs=[txt, voice, img, vid, use_ai_toggle, history_state],
-            outputs=[api_response, audio_out, video_out, history_state],
-        ).then(
-            fn=refresh_history_display,
-            inputs=[history_state],
-            outputs=[history_display],
-        )
-
-if __name__ == "__main__":
-    # Enable queue to ensure reliable streaming and long-running task handling
     demo.queue()
     demo.launch(server_name="127.0.0.1")
