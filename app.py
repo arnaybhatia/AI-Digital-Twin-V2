@@ -54,20 +54,7 @@ def initialize_session():
     th = make_request("POST", "/threads", json={"client_token_id": CLIENT_TOKEN})
     THREAD_ID = th["id"]
     
-    # Set initial system context for natural, expressive responses
-    system_prompt = """You are JimTwin, a friendly and expressive AI assistant. 
-    Always maintain a natural, conversational tone with appropriate emotions and expressiveness. 
-    Avoid monotone or overly formal responses. Be engaging and personable in your communication style."""
-    
-    try:
-        make_request(
-            "POST",
-            f"/threads/{THREAD_ID}/messages",
-            json={"client_token_id": CLIENT_TOKEN, "text": system_prompt, "role": "system"},
-        )
-    except:
-        # If system messages aren't supported, send as first user message
-        pass
+    # System prompt initialization removed per request
 
 
 def get_response(user_input: str, language: str = "en-us") -> str:
@@ -77,10 +64,11 @@ def get_response(user_input: str, language: str = "en-us") -> str:
     # Add language instruction to the user input with better prompting
     language_prompts = {
         "en-us": "",  # No additional prompt for English
-        "ja-jp": "Respond naturally in Japanese, maintaining a conversational and expressive tone: ",
-        "zh-cn": "Respond naturally in Chinese, maintaining a conversational and expressive tone: ",
         "fr-fr": "Respond naturally in French, maintaining a conversational and expressive tone: ",
-        "de-de": "Respond naturally in German, maintaining a conversational and expressive tone: "
+        "de": "Respond naturally in German, maintaining a conversational and expressive tone: ",
+        "ja": "Respond naturally in Japanese, maintaining a conversational and expressive tone: ",
+        "ko": "Respond naturally in Korean, maintaining a conversational and expressive tone: ",
+        "cmn": "Respond naturally in Mandarin Chinese, maintaining a conversational and expressive tone: ",
     }
     
     language_prompt = language_prompts.get(language, "")
@@ -152,11 +140,12 @@ def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
     return final_sentences
 
 
-def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str = "en-us") -> str:
+def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
     """Clone voice for a single sentence using Zonos via container exec.
 
     We stage the source_wav into ./data (mounted to /app/data in zonos container)
     and call a helper script inside the zonos image to produce the output wav.
+    Supports model selection ("transformer" or "hybrid").
     """
 
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -178,20 +167,36 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str
     container_out_path = f"/app/data/{out_basename}"
 
     cmd = [
-        "docker", "compose", "exec", "zonos", "python", "zonos_generate.py",
+        "docker", "compose", "exec", "zonos", "python", "-u", "zonos_generate.py",
         "--text", text,
         "--output", container_out_path,
         "--speaker_audio", container_prompt_path,
+        "--model", model,
         "--language", language,
     ]
 
     try:
-        subprocess.run(cmd, cwd=project_root, check=True, capture_output=True)
+        print("[zonos] Running:", " ".join(cmd), flush=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        zonos_log = []
+        if proc.stdout:
+            for line in proc.stdout:
+                print("[zonos]", line, end="", flush=True)
+                zonos_log.append(line)
+        ret = proc.wait()
+        if ret != 0:
+            raise RuntimeError(f"Zonos generation failed with exit code {ret}. See logs above.")
         shutil.move(host_out_path, out_wav)
         return out_wav
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode() if isinstance(e.stderr, (bytes, bytearray)) else str(e.stderr)
-        raise RuntimeError(f"Zonos generation failed: {stderr}")
+    except Exception as e:
+        raise RuntimeError(f"Zonos generation failed: {e}")
     finally:
         try:
             if os.path.exists(host_prompt_path):
@@ -265,7 +270,7 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             pass
 
 
-def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us") -> str:
+def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
     """Clone voice with sentence batching using dedicated temp directory"""
     # Create dedicated temp directory for this operation
     project_root = os.path.abspath(os.path.dirname(__file__))
@@ -283,7 +288,7 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str =
 
         if len(sentences) == 1:
             # Single sentence, process directly to output
-            return clone_voice_sentence(text, source_wav, out_wav, language)
+            return clone_voice_sentence(text, source_wav, out_wav, language, model)
 
         # Multiple sentences, batch process in temp directory
         temp_audio_files = []
@@ -293,7 +298,7 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str =
                 continue
 
             temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
-            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path, language)
+            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path, language, model)
             temp_audio_files.append(temp_audio_path)
 
         if not temp_audio_files:
@@ -319,8 +324,8 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str =
             )
 
 
-def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us") -> str:
-    return clone_voice_docker(text, src_wav, out_wav, language)
+def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
+    return clone_voice_docker(text, src_wav, out_wav, language, model)
 
 
 # ——— SadTalker animation ———
@@ -348,6 +353,7 @@ def sadtalker_animate(
         "exec",
         "sadtalker",
         "python",
+        "-u",
         "inference.py",
         "--driven_audio",
         cont_wav,
@@ -360,11 +366,25 @@ def sadtalker_animate(
         "--still",
         "--verbose",
     ]
-    res = subprocess.run(
-        cmd, cwd=project_root, check=True, capture_output=True, text=True
+    print("[sadtalker] Running:", " ".join(cmd), flush=True)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=project_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
     )
+    st_log_lines = []
+    if proc.stdout:
+        for line in proc.stdout:
+            print("[sadtalker]", line, end="", flush=True)
+            st_log_lines.append(line)
+    ret = proc.wait()
+    if ret != 0:
+        raise RuntimeError(f"SadTalker failed with exit code {ret}. See logs above.")
 
-    log = (res.stdout or "") + "\n" + (res.stderr or "")
+    log = "".join(st_log_lines)
     pattern = r"The generated video is named[: ]+(\S+\.mp4)"
     matches = re.findall(pattern, log)
 
@@ -452,6 +472,7 @@ def pipeline(
     video_file,
     use_ai: bool,
     language: str,
+    tts_model: str,
     history: list,
     progress=gr.Progress(),
 ):
@@ -507,7 +528,7 @@ def pipeline(
 
         # Clone voice to temp, then persist to results so it remains accessible
         cloned_wav_tmp = os.path.join(workdir, f"{uid}_clone.wav")
-        clone_voice(assistant_text, src_wav, cloned_wav_tmp, language)
+        clone_voice(assistant_text, src_wav, cloned_wav_tmp, language, tts_model)
 
         # Persist audio in results directory for playback and history
         project_root = os.path.abspath(os.path.dirname(__file__))
@@ -579,8 +600,23 @@ if __name__ == "__main__":
                 use_ai = gr.Checkbox(label="Ask AI JimTwin.", value=True)
                 language = gr.Dropdown(
                     label="Language",
-                    choices=[("English", "en-us"), ("Japanese", "ja-jp"), ("Chinese", "zh-cn"), ("French", "fr-fr"), ("German", "de-de")],
+                    choices=[
+                        ("English (US)", "en-us"),
+                        ("French", "fr-fr"),
+                        ("German", "de"),
+                        ("Japanese", "ja"),
+                        ("Korean", "ko"),
+                        ("Mandarin Chinese", "cmn"),
+                    ],
                     value="en-us"
+                )
+                tts_model = gr.Dropdown(
+                    label="TTS Model",
+                    choices=[
+                        ("Transformer", "transformer"),
+                        ("Hybrid (recommended for Japanese)", "hybrid"),
+                    ],
+                    value="hybrid"
                 )
                 voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
                 image = gr.Image(label="Portrait Image", type="filepath")
@@ -609,10 +645,10 @@ if __name__ == "__main__":
             f3 = _F(vid_path)
             return txt or "", f1, f2, f3
 
-        def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, hist, progress=gr.Progress()):
+        def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, model, hist, progress=gr.Progress()):
             # Stream steps using existing pipeline generator
             txt, vf, imf, vif = _validate_inputs(txt, v_path, img_path, vid_path)
-            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, hist, progress):
+            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, model, hist, progress):
                 yield api_resp, a_out, v_out, hist_out
 
         def _clear():
@@ -630,7 +666,7 @@ if __name__ == "__main__":
 
         generate.click(
             fn=_run,
-            inputs=[text, voice, image, video, use_ai, language, state],
+            inputs=[text, voice, image, video, use_ai, language, tts_model, state],
             outputs=[api_out, audio_out, video_out, state],
         ).then(fn=_refresh, inputs=[state], outputs=[history_md])
 

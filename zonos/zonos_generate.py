@@ -83,8 +83,13 @@ if __name__ == "__main__":
     parser.add_argument('--text', required=True, help='Text to convert to speech')
     parser.add_argument('--output', required=True, help='Output audio file path')
     parser.add_argument('--speaker_audio', help='Path to speaker reference audio file')
-    parser.add_argument('--model', default='hybrid', choices=['transformer', 'hybrid'], help='Model to use (transformer or hybrid)')
-    parser.add_argument('--language', default='en-us', help='BCP-47 language tag like en-us, es-es, fr-fr')
+    parser.add_argument('--model', default='hybrid', choices=['transformer', 'hybrid'], help='TTS model to use (hybrid recommended for Japanese)')
+    parser.add_argument(
+        '--language',
+        default='en-us',
+        choices=['en-us', 'fr-fr', 'de', 'ja', 'ko', 'cmn'],
+        help='Supported languages: en-us (English US), fr-fr (French), de (German), ja (Japanese), ko (Korean), cmn (Mandarin Chinese)'
+    )
     
     args = parser.parse_args()
     success = generate_speech(args.text, args.output, args.speaker_audio, args.model, args.language)
