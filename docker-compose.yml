@@ -7,6 +7,12 @@ services:
     volumes:
       - ./data:/app/data # Mount data directory for input/output
       - ./results:/app/results # Mount results directory
+    # Explicit GPU request for non-Swarm docker compose
+    # (deploy.resources.reservations.devices is ignored outside Swarm)
+    gpus: all
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
       resources:
         limits:
@@ -25,8 +31,11 @@ services:
       - "8090:8090"
     volumes:
       - ./data:/app/data # Mount data directory for input/output
+    # Ensure GPU visibility in regular docker compose mode
+    gpus: all
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - HF_HOME=/root/.cache/huggingface
     deploy:
       resources:

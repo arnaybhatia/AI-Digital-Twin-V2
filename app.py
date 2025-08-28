@@ -108,62 +108,27 @@ def get_response(user_input: str, language: str = "en-us") -> str:
 
 
 # ——— Voice cloning ———
-def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
-    """Split text into sentences with natural sentence boundaries and token limit fallback"""
-    import re
-
-    # Split by natural sentence endings: . ! ?
-    # Keep the punctuation with the sentence
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-
-    # Clean up sentences and remove empty ones
-    sentences = [s.strip() for s in sentences if s.strip()]
-
-    # Further split long sentences by token limit
-    final_sentences = []
-    for sentence in sentences:
-        words = sentence.split()
-        if len(words) <= max_tokens:
-            if sentence.strip():  # Only add non-empty sentences
-                final_sentences.append(sentence)
-        else:
-            # Split long sentence into chunks
-            for i in range(0, len(words), max_tokens):
-                chunk = " ".join(words[i : i + max_tokens])
-                if chunk.strip():
-                    final_sentences.append(chunk)
-
-    # If no valid sentences found, return original text as single sentence
-    if not final_sentences:
-        final_sentences = [text.strip()]
-
-    return final_sentences
+def split_text_into_sentences(*args, **kwargs):  # legacy shim (no longer used)
+    return [args[0]] if args else []
 
 
-def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
-    """Clone voice for a single sentence using Zonos via container exec.
+def _exec_full_tts(text: str, source_wav: str, out_wav: str, language: str, model: str) -> str:
+    """Execute a single docker compose call to zonos_generate for entire text.
 
-    We stage the source_wav into ./data (mounted to /app/data in zonos container)
-    and call a helper script inside the zonos image to produce the output wav.
-    Supports model selection ("transformer" or "hybrid").
+    zonos_generate.py now handles internal sentence splitting & concatenation.
     """
-
     project_root = os.path.abspath(os.path.dirname(__file__))
     host_data_dir = os.path.join(project_root, "data")
     os.makedirs(host_data_dir, exist_ok=True)
 
+    # Stage speaker reference
     prompt_basename = f"voice_prompt_{uuid.uuid4().hex[:8]}.wav"
     host_prompt_path = os.path.join(host_data_dir, prompt_basename)
     container_prompt_path = f"/app/data/{prompt_basename}"
+    shutil.copy(source_wav, host_prompt_path)
 
-    try:
-        shutil.copy(source_wav, host_prompt_path)
-    except Exception as e:
-        raise RuntimeError(f"Failed to stage audio prompt for Zonos: {e}")
-
-    # Output staging
     out_basename = f"tts_{uuid.uuid4().hex[:8]}.wav"
-    host_out_path = os.path.join(host_data_dir, out_basename)
+    host_intermediate_out = os.path.join(host_data_dir, out_basename)
     container_out_path = f"/app/data/{out_basename}"
 
     cmd = [
@@ -174,154 +139,42 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str, language: str
         "--model", model,
         "--language", language,
     ]
-
+    print("[zonos] Running:", " ".join(cmd), flush=True)
+    proc = subprocess.Popen(
+        cmd,
+        cwd=project_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    if proc.stdout:
+        for line in proc.stdout:
+            print("[zonos]", line, end="", flush=True)
+    ret = proc.wait()
     try:
-        print("[zonos] Running:", " ".join(cmd), flush=True)
-        proc = subprocess.Popen(
-            cmd,
-            cwd=project_root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-        )
-        zonos_log = []
-        if proc.stdout:
-            for line in proc.stdout:
-                print("[zonos]", line, end="", flush=True)
-                zonos_log.append(line)
-        ret = proc.wait()
         if ret != 0:
-            raise RuntimeError(f"Zonos generation failed with exit code {ret}. See logs above.")
-        shutil.move(host_out_path, out_wav)
+            raise RuntimeError(f"Zonos generation failed (exit {ret})")
+        shutil.move(host_intermediate_out, out_wav)
         return out_wav
-    except Exception as e:
-        raise RuntimeError(f"Zonos generation failed: {e}")
     finally:
-        try:
-            if os.path.exists(host_prompt_path):
-                os.remove(host_prompt_path)
-            # keep host_out_path if moved; otherwise cleanup
-            if os.path.exists(host_out_path):
-                os.remove(host_out_path)
-        except Exception:
-            pass
+        for p in (host_prompt_path, host_intermediate_out):
+            try:
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception:
+                pass
 
 
-def combine_audio_files(audio_files: list, output_path: str) -> str:
-    """Combine multiple audio files using ffmpeg"""
-    import tempfile
-
-    # Create a temporary file list for ffmpeg
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        for audio_file in audio_files:
-            f.write(f"file '{os.path.abspath(audio_file)}'\n")
-        file_list_path = f.name
-
-    try:
-        # Use ffmpeg to concatenate audio files
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            file_list_path,
-            "-c",
-            "copy",
-            output_path,
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
+def combine_audio_files(audio_files: list, output_path: str) -> str:  # legacy
+    if audio_files:
+        shutil.copy(audio_files[0], output_path)
         return output_path
-    except subprocess.CalledProcessError:
-        # Fallback: use ffmpeg with filter_complex for better compatibility
-        try:
-            inputs = []
-            filter_parts = []
-
-            for i, audio_file in enumerate(audio_files):
-                inputs.extend(["-i", audio_file])
-                filter_parts.append(f"[{i}:0]")
-
-            filter_complex = (
-                "".join(filter_parts) + f"concat=n={len(audio_files)}:v=0:a=1[out]"
-            )
-
-            cmd = (
-                ["ffmpeg", "-y"]
-                + inputs
-                + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
-            )
-            subprocess.run(cmd, check=True, capture_output=True)
-            return output_path
-        except subprocess.CalledProcessError:
-            # If both methods fail, return the first audio file
-            if audio_files:
-                shutil.copy(audio_files[0], output_path)
-                return output_path
-            raise RuntimeError("Failed to combine audio files")
-    finally:
-        # Clean up temporary file list
-        try:
-            os.unlink(file_list_path)
-        except:
-            pass
+    raise RuntimeError("No audio files provided")
 
 
 def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
-    """Clone voice with sentence batching using dedicated temp directory"""
-    # Create dedicated temp directory for this operation
-    project_root = os.path.abspath(os.path.dirname(__file__))
-    temp_dir = os.path.join(project_root, "temp")
-    os.makedirs(temp_dir, exist_ok=True)
-
-    # Create unique subdirectory for this operation
-    operation_id = uuid.uuid4().hex[:8]
-    operation_temp_dir = os.path.join(temp_dir, f"voice_clone_{operation_id}")
-    os.makedirs(operation_temp_dir, exist_ok=True)
-
-    try:
-        # Split text into manageable sentences
-        sentences = split_text_into_sentences(text)
-
-        if len(sentences) == 1:
-            # Single sentence, process directly to output
-            return clone_voice_sentence(text, source_wav, out_wav, language, model)
-
-        # Multiple sentences, batch process in temp directory
-        temp_audio_files = []
-
-        for i, sentence in enumerate(sentences):
-            if not sentence.strip():
-                continue
-
-            temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
-            clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path, language, model)
-            temp_audio_files.append(temp_audio_path)
-
-        if not temp_audio_files:
-            raise RuntimeError("No valid sentences to process")
-
-        if len(temp_audio_files) == 1:
-            # Only one valid sentence, move directly to output
-            shutil.move(temp_audio_files[0], out_wav)
-        else:
-            # Combine multiple audio files
-            combine_audio_files(temp_audio_files, out_wav)
-
-        return out_wav
-
-    finally:
-        # Clean up the entire operation temp directory
-        try:
-            if os.path.exists(operation_temp_dir):
-                shutil.rmtree(operation_temp_dir)
-        except Exception as e:
-            print(
-                f"Warning: Failed to clean up temp directory {operation_temp_dir}: {e}"
-            )
+    return _exec_full_tts(text, source_wav, out_wav, language, model)
 
 
 def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
