@@ -173,11 +173,11 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:  # legacy
     raise RuntimeError("No audio files provided")
 
 
-def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
+def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "transformer") -> str:
     return _exec_full_tts(text, source_wav, out_wav, language, model)
 
 
-def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us", model: str = "hybrid") -> str:
+def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us", model: str = "transformer") -> str:
     return clone_voice_docker(text, src_wav, out_wav, language, model)
 
 
@@ -467,9 +467,8 @@ if __name__ == "__main__":
                     label="TTS Model",
                     choices=[
                         ("Transformer", "transformer"),
-                        ("Hybrid (recommended for Japanese)", "hybrid"),
                     ],
-                    value="hybrid"
+                    value="transformer"
                 )
                 voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
                 image = gr.Image(label="Portrait Image", type="filepath")

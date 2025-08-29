@@ -7,7 +7,7 @@ Create personalized talking avatars with AI-powered voice cloning and facial ani
 ## Features
 
 - **AI-Powered Conversations** - Generate intelligent responses using TMPT AI or use custom text input
-- **Advanced Voice Cloning** - Clone any voice using Zonos TTS with multilingual support (6 languages) and model selection (transformer/hybrid)
+- **Advanced Voice Cloning** - Clone any voice using Zonos TTS with multilingual support (6 languages) using the Transformer model
 - **Facial Animation** - Animate portrait images with SadTalker for realistic lip-sync and expressions
 - **Modern Web Interface** - Clean, responsive Gradio interface with real-time progress tracking
 - **Progressive Output** - Watch results generate step-by-step: AI response → cloned voice → animated video
@@ -59,7 +59,7 @@ docker compose up -d --build
 - No HTTP API exposed by default in this branch.
 - Example:
 ```bash
-docker compose exec zonos python zonos_generate.py --text "Hello world" --speaker_audio /app/data/speaker.wav --output /app/data/out.wav --language en-us --model hybrid
+docker compose exec zonos python zonos_generate.py --text "Hello world" --speaker_audio /app/data/speaker.wav --output /app/data/out.wav --language en-us --model transformer
 ```
 
 
@@ -72,7 +72,7 @@ docker compose exec zonos python zonos_generate.py --text "Hello world" --speake
 
 2. **Configure settings:**
    - **Language**: Choose from 6 supported languages (English, French, German, Japanese, Korean, Mandarin Chinese)
-   - **TTS Model**: Select Transformer or Hybrid (Hybrid recommended for Japanese)
+   - **TTS Model**: Transformer
    - **AI Mode**: Toggle "Ask AI JimTwin" ON for AI-generated responses or OFF for raw text
 
 3. **Enter your text:**
@@ -115,7 +115,7 @@ AI-Digital-Twin-V2/
 ## Architecture & Pipeline
 
 ### Core Services
-- **Zonos TTS** (Container exec) - Voice cloning via Zonos CLI with 6-language support and model selection
+- **Zonos TTS** (Container exec) - Voice cloning via Zonos CLI with 6-language support
 - **SadTalker** (Port 7861) - Facial animation service with model validation
 - **Main App** (app.py) - Gradio web interface with pipeline orchestration
 
@@ -155,14 +155,14 @@ AI-Digital-Twin-V2/
 ### Testing Voice Cloning
 Test Zonos generation inside the container:
 ```bash
-# Generate Japanese speech using speaker reference (hybrid model recommended)
+# Generate Japanese speech using speaker reference
 cp data/speaker.wav data/ref.wav
 docker compose exec zonos python zonos_generate.py \
   --text "こんにちは世界" \
   --speaker_audio /app/data/ref.wav \
   --output /app/data/test_output.wav \
   --language ja \
-  --model hybrid
+  --model transformer
 ls -l data/test_output.wav
 ```
 
@@ -214,17 +214,11 @@ The TTS system supports the following languages:
 - **English (US)** - `en-us`
 - **French** - `fr-fr` 
 - **German** - `de`
-- **Japanese** - `ja` (recommended with hybrid model)
+- **Japanese** - `ja`
 - **Korean** - `ko`
 - **Mandarin Chinese** - `cmn`
 
-### TTS Models
+### TTS Model
 - **Transformer**: Standard model with good quality and speed
-- **Hybrid**: Enhanced model with better quality, especially recommended for Japanese
-
-### Model Selection Guidelines
-- Use **Hybrid** for Japanese text for optimal results
-- Use **Transformer** for faster generation with other languages
-- Both models support all languages, but hybrid performs better with Japanese
 
 Special thanks to the developers and researchers who created these foundational technologies that make this AI Digital Twin project possible.

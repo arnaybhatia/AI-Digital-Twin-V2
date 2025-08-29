@@ -39,7 +39,7 @@ def generate_speech(
     text: str,
     output_path: str,
     speaker_audio: str = None,
-    model_name: str = "hybrid",
+    model_name: str = "transformer",
     language: str = "en-us",
     split_sentences: bool = True,
 ) -> bool:
@@ -131,7 +131,8 @@ if __name__ == "__main__":
     parser.add_argument('--text', required=True, help='Text to convert to speech')
     parser.add_argument('--output', required=True, help='Output audio file path')
     parser.add_argument('--speaker_audio', help='Path to speaker reference audio file')
-    parser.add_argument('--model', default='hybrid', choices=['transformer', 'hybrid'], help='TTS model to use (hybrid recommended for Japanese)')
+    parser.add_argument('--model', default='transformer', choices=['transformer'], help='TTS model to use')
+
     parser.add_argument(
         '--language',
         default='en-us',

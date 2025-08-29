@@ -15,7 +15,6 @@ def check_and_download_models():
     """Checks if models are cached and downloads them if necessary."""
     models_to_check = {
         "transformer": "Zyphra/Zonos-v0.1-transformer",
-        "hybrid": "Zyphra/Zonos-v0.1-hybrid" # Uncomment if you want hybrid too
     }
     # Default Hugging Face cache directory
     cache_dir = Path(os.environ.get("HF_HOME", Path.home() / ".cache/huggingface/hub"))
@@ -39,7 +38,7 @@ def check_and_download_models():
         else:
             print(f"{model_type.capitalize()} model found in cache.")
     if all_models_present:
-        print("All required Zonos models are present in the cache.")
+        print("Transformer model is present in the cache.")
 # --- Main Execution ---
 print("Starting Zonos service...")
 # Check and download models on startup
