@@ -59,15 +59,17 @@ def get_response(user_input: str) -> str:
     if CLIENT_TOKEN is None or THREAD_ID is None:
         initialize_session()
 
+    print(f"🧠 Sending message to AI: {user_input[:100]}{'...' if len(user_input) > 100 else ''}")
     msg = make_request(
         "POST",
         f"/threads/{THREAD_ID}/messages",
         json={"client_token_id": CLIENT_TOKEN, "text": user_input},
     )
     message_id = msg["id"]
+    print(f"📤 Message sent, waiting for AI response...")
 
     # Poll for reply...
-    for _ in range(10):
+    for attempt in range(10):
         try:
             reply = make_request(
                 "GET",
@@ -75,11 +77,14 @@ def get_response(user_input: str) -> str:
                 params={"client_token_id": CLIENT_TOKEN, "timeout": 5},
             )
             if reply and "text" in reply:
+                print(f"✅ AI Response received: {reply['text'][:100]}{'...' if len(reply['text']) > 100 else ''}")
                 return reply["text"]
         except requests.HTTPError:
             pass
+        print(f"⏳ Waiting for response... (attempt {attempt + 1}/10)")
         time.sleep(1)
 
+    print("🔄 Polling timeout, trying fallback scan...")
     # Fallback scan
     msgs = make_request(
         "GET",
@@ -88,6 +93,7 @@ def get_response(user_input: str) -> str:
     )
     for m in reversed(msgs):
         if m.get("speaker") == "agent" and "text" in m:
+            print(f"✅ AI Response found via fallback: {m['text'][:100]}{'...' if len(m['text']) > 100 else ''}")
             return m["text"]
     raise RuntimeError("No reply from TMPT within timeout")
 
@@ -155,6 +161,7 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
         "audio_prompt_path": container_prompt_path,
     }
 
+    print(f"🎤 Cloning voice for text: {text[:50]}{'...' if len(text) > 50 else ''}")
     try:
         resp = requests.post(
             f"{CHATTERBOX_API_URL}/v1/tts",
@@ -162,12 +169,22 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
             headers={"Content-Type": "application/json"},
         )
         resp.raise_for_status()
+        print(f"✅ Voice cloning successful for sentence")
 
         with open(out_wav, "wb") as out:
             out.write(resp.content)
         return out_wav
 
     except requests.exceptions.HTTPError as e:
+        print(f"❌ Chatterbox HTTP Error: {e}")
+        if e.response is not None:
+            print(f"📄 Status Code: {e.response.status_code}")
+            print(f"📄 Response Headers: {dict(e.response.headers)}")
+            try:
+                error_body = e.response.text
+                print(f"📄 Response Body: {error_body}")
+            except:
+                pass
         if e.response is not None and e.response.status_code == 500:
             raise RuntimeError(
                 f"Chatterbox server error - likely CUDA/GPU issue. Check container logs: {e}"
@@ -178,16 +195,24 @@ def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
             err_detail = None
             try:
                 err_detail = e.response.json()
+                print(f"📄 Error Details: {err_detail}")
             except Exception:
                 pass
             raise RuntimeError(
                 f"Chatterbox API error ({status}): {e}. Details: {err_detail}"
             )
-    except requests.exceptions.ConnectionError:
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ Chatterbox Connection Error: {e}")
+        print(f"📄 URL: {CHATTERBOX_API_URL}/v1/tts")
+        print(f"💡 Make sure Chatterbox container is running on port 8080")
         raise RuntimeError(
             "Cannot connect to Chatterbox API. Ensure container is running on port 8080"
         )
     except Exception as e:
+        import traceback
+        print(f"❌ Voice cloning error: {e}")
+        print(f"📋 Full traceback:")
+        print(traceback.format_exc())
         raise RuntimeError(f"Voice cloning failed: {e}")
     finally:
         # Best-effort cleanup of the staged prompt file
@@ -223,9 +248,20 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             "copy",
             output_path,
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+        print(f"🔗 Combining {len(audio_files)} audio files...")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        if result.stdout:
+            print(f"📄 FFmpeg stdout: {result.stdout}")
+        if result.stderr:
+            print(f"⚠️ FFmpeg stderr: {result.stderr}")
         return output_path
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FFmpeg concat failed: {e}")
+        print(f"📄 Command: {' '.join(cmd)}")
+        if e.stdout:
+            print(f"📄 stdout: {e.stdout}")
+        if e.stderr:
+            print(f"❌ stderr: {e.stderr}")
         # Fallback: use ffmpeg with filter_complex for better compatibility
         try:
             inputs = []
@@ -244,9 +280,20 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
                 + inputs
                 + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
             )
-            subprocess.run(cmd, check=True, capture_output=True)
+            print(f"🔗 Using filter_complex to combine audio files...")
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if result.stdout:
+                print(f"📄 FFmpeg filter_complex stdout: {result.stdout}")
+            if result.stderr:
+                print(f"⚠️ FFmpeg filter_complex stderr: {result.stderr}")
             return output_path
-        except subprocess.CalledProcessError:
+        except subprocess.CalledProcessError as e:
+            print(f"❌ FFmpeg filter_complex failed: {e}")
+            print(f"📄 Command: {' '.join(cmd)}")
+            if e.stdout:
+                print(f"📄 stdout: {e.stdout}")
+            if e.stderr:
+                print(f"❌ stderr: {e.stderr}")
             # If both methods fail, return the first audio file
             if audio_files:
                 shutil.copy(audio_files[0], output_path)
@@ -282,11 +329,13 @@ def clone_voice_docker(text: str, source_wav: str, out_wav: str) -> str:
 
         # Multiple sentences, batch process in temp directory
         temp_audio_files = []
+        print(f"🎤 Processing {len(sentences)} sentences for voice cloning...")
 
         for i, sentence in enumerate(sentences):
             if not sentence.strip():
                 continue
 
+            print(f"🎤 Processing sentence {i+1}/{len(sentences)}")
             temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
             clone_voice_sentence(sentence.strip(), source_wav, temp_audio_path)
             temp_audio_files.append(temp_audio_path)
@@ -355,9 +404,34 @@ def sadtalker_animate(
         "--still",
         "--verbose",
     ]
-    res = subprocess.run(
-        cmd, cwd=project_root, check=True, capture_output=True, text=True
-    )
+    print(f"🎭 Starting SadTalker animation...")
+    print(f"📋 Command: {' '.join(cmd)}")
+    try:
+        res = subprocess.run(
+            cmd, cwd=project_root, check=True, text=True, capture_output=True
+        )
+        print(f"✅ SadTalker completed successfully")
+        if res.stdout:
+            print(f"📄 SadTalker stdout:")
+            print(res.stdout)
+        if res.stderr:
+            print(f"⚠️ SadTalker stderr:")
+            print(res.stderr)
+    except subprocess.CalledProcessError as e:
+        print(f"❌ SadTalker command failed: {e}")
+        print(f"📄 Command: {' '.join(cmd)}")
+        print(f"📄 Working directory: {project_root}")
+        if e.stdout:
+            print(f"📄 stdout: {e.stdout}")
+        if e.stderr:
+            print(f"❌ stderr: {e.stderr}")
+        raise RuntimeError(f"SadTalker animation failed: {e}")
+    except FileNotFoundError as e:
+        print(f"❌ File not found error: {e}")
+        print(f"📄 Command: {' '.join(cmd)}")
+        print(f"📄 Working directory: {project_root}")
+        print(f"💡 Make sure Docker is running and 'docker compose' is available in PATH")
+        raise RuntimeError(f"Docker command not found. Make sure Docker is installed and running: {e}")
 
     log = (res.stdout or "") + "\n" + (res.stderr or "")
     pattern = r"The generated video is named[: ]+(\S+\.mp4)"
@@ -429,12 +503,31 @@ def sadtalker_animate(
     ]
 
     try:
-        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        print(f"🎬 Converting video to web-compatible format...")
+        result = subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+        print(f"✅ Video conversion complete")
+        if result.stdout:
+            print(f"📄 FFmpeg conversion stdout: {result.stdout}")
+        if result.stderr:
+            print(f"⚠️ FFmpeg conversion stderr: {result.stderr}")
         # Clean up temporary files
         shutil.rmtree(host_data_dir)
         return output_path
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"❌ FFmpeg conversion failed: {e}")
+        print(f"📄 Command: {' '.join(ffmpeg_cmd)}")
+        if e.stdout:
+            print(f"📄 stdout: {e.stdout}")
+        if e.stderr:
+            print(f"❌ stderr: {e.stderr}")
         # If ffmpeg fails, return original file and clean up
+        shutil.rmtree(host_data_dir)
+        return generated_video_path
+    except FileNotFoundError as e:
+        print(f"❌ FFmpeg not found: {e}")
+        print(f"📄 Command: {' '.join(ffmpeg_cmd)}")
+        print(f"💡 Make sure FFmpeg is installed and available in PATH")
+        # If ffmpeg not found, return original file and clean up
         shutil.rmtree(host_data_dir)
         return generated_video_path
 
@@ -542,6 +635,11 @@ def pipeline(
         yield (assistant_text, cloned_wav, final_mp4, history)
 
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"❌ Pipeline Error: {str(e)}")
+        print(f"📋 Full traceback:")
+        print(error_details)
         progress(0, desc="❌ Failed")
         yield (f"❌ Error: {str(e)}", None, None, history)
     finally:
