@@ -100,35 +100,50 @@ def get_response(user_input: str) -> str:
 
 # ——— Voice cloning ———
 def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
-    """Split text into sentences with natural sentence boundaries and token limit fallback"""
+    """Split text into chunks, grouping every 2 sentences (after cleanup) with token fallback.
+
+    Behaviour change: Previously each sentence (or token-sized chunk) was separate. Now we
+    combine two consecutive base sentences into one chunk to reduce the number of cloning
+    calls and produce slightly longer, more natural prosody.
+    """
     import re
 
-    # Split by natural sentence endings: . ! ?
-    # Keep the punctuation with the sentence
-    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    # 1. Base sentence split
+    base_sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+    base_sentences = [s.strip() for s in base_sentences if s.strip()]
 
-    # Clean up sentences and remove empty ones
-    sentences = [s.strip() for s in sentences if s.strip()]
+    if not base_sentences:
+        return [text.strip()] if text.strip() else []
 
-    # Further split long sentences by token limit
-    final_sentences = []
-    for sentence in sentences:
-        words = sentence.split()
+    # 2. Apply token limit to any very long sentence first (rare)
+    normalized = []
+    for s in base_sentences:
+        words = s.split()
         if len(words) <= max_tokens:
-            if sentence.strip():  # Only add non-empty sentences
-                final_sentences.append(sentence)
+            normalized.append(s)
         else:
-            # Split long sentence into chunks
             for i in range(0, len(words), max_tokens):
-                chunk = " ".join(words[i : i + max_tokens])
-                if chunk.strip():
-                    final_sentences.append(chunk)
+                chunk = " ".join(words[i : i + max_tokens]).strip()
+                if chunk:
+                    normalized.append(chunk)
 
-    # If no valid sentences found, return original text as single sentence
-    if not final_sentences:
-        final_sentences = [text.strip()]
+    # 3. Group into pairs (every 2 sentences)
+    grouped = []
+    i = 0
+    while i < len(normalized):
+        # Take one or two sentences
+        group = normalized[i:i+2]
+        combined = " ".join(group).strip()
+        # If combined is too long for max_tokens, fall back to individual ones
+        if len(combined.split()) > max_tokens and len(group) == 2:
+            # Add first alone, then second will be processed next loop
+            grouped.append(group[0])
+            i += 1
+            continue
+        grouped.append(combined)
+        i += 2
 
-    return final_sentences
+    return grouped
 
 
 def clone_voice_sentence(text: str, source_wav: str, out_wav: str) -> str:
