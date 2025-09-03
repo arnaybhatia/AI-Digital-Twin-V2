@@ -146,6 +146,8 @@ def _exec_full_tts(text: str, source_wav: str, out_wav: str, language: str, mode
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         bufsize=1,
     )
     if proc.stdout:
@@ -226,6 +228,8 @@ def sadtalker_animate(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding='utf-8',
+        errors='replace',
         bufsize=1,
     )
     st_log_lines = []
@@ -307,7 +311,7 @@ def sadtalker_animate(
     ]
 
     try:
-        subprocess.run(ffmpeg_cmd, check=True, capture_output=True)
+        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, encoding='utf-8', errors='replace')
         # Clean up temporary files
         shutil.rmtree(host_data_dir)
         return output_path
