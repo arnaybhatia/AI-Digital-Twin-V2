@@ -9,6 +9,36 @@ import requests
 from dotenv import load_dotenv
 import gradio as gr
 
+def run_command_stream(cmd, cwd=None, print_prefix=""):
+    """
+    Run a command and stream its combined stdout/stderr live to the console.
+    Returns (returncode, combined_output).
+    """
+    print_prefix = f"{print_prefix} " if print_prefix else ""
+    try:
+        print(f"{print_prefix}▶️ Running: {' '.join(cmd)}")
+        # Use Popen to stream output live
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        combined = []
+        if proc.stdout:
+            for line in iter(proc.stdout.readline, ""):
+                if not line:
+                    break
+                print(line.rstrip(), flush=True)
+                combined.append(line)
+        proc.wait()
+        return proc.returncode, "".join(combined)
+    except FileNotFoundError:
+        # Re-raise to be handled by caller with better context
+        raise
+
 # ——— Environment ———
 API_KEY = None
 CHATTERBOX_API_URL = None
@@ -249,19 +279,14 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             output_path,
         ]
         print(f"🔗 Combining {len(audio_files)} audio files...")
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        if result.stdout:
-            print(f"📄 FFmpeg stdout: {result.stdout}")
-        if result.stderr:
-            print(f"⚠️ FFmpeg stderr: {result.stderr}")
-        return output_path
-    except subprocess.CalledProcessError as e:
+        rc, _ = run_command_stream(cmd, print_prefix="FFmpeg")
+        if rc == 0:
+            return output_path
+        else:
+            raise RuntimeError(f"ffmpeg concat exited with code {rc}")
+    except Exception as e:
         print(f"❌ FFmpeg concat failed: {e}")
         print(f"📄 Command: {' '.join(cmd)}")
-        if e.stdout:
-            print(f"📄 stdout: {e.stdout}")
-        if e.stderr:
-            print(f"❌ stderr: {e.stderr}")
         # Fallback: use ffmpeg with filter_complex for better compatibility
         try:
             inputs = []
@@ -281,19 +306,14 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
                 + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
             )
             print(f"🔗 Using filter_complex to combine audio files...")
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            if result.stdout:
-                print(f"📄 FFmpeg filter_complex stdout: {result.stdout}")
-            if result.stderr:
-                print(f"⚠️ FFmpeg filter_complex stderr: {result.stderr}")
-            return output_path
-        except subprocess.CalledProcessError as e:
+            rc, _ = run_command_stream(cmd, print_prefix="FFmpeg")
+            if rc == 0:
+                return output_path
+            else:
+                raise RuntimeError(f"ffmpeg filter_complex exited with code {rc}")
+        except Exception as e:
             print(f"❌ FFmpeg filter_complex failed: {e}")
             print(f"📄 Command: {' '.join(cmd)}")
-            if e.stdout:
-                print(f"📄 stdout: {e.stdout}")
-            if e.stderr:
-                print(f"❌ stderr: {e.stderr}")
             # If both methods fail, return the first audio file
             if audio_files:
                 shutil.copy(audio_files[0], output_path)
@@ -390,6 +410,7 @@ def sadtalker_animate(
         "docker",
         "compose",
         "exec",
+        "-T",
         "sadtalker",
         "python",
         "inference.py",
@@ -406,26 +427,14 @@ def sadtalker_animate(
     ]
     print(f"🎭 Starting SadTalker animation...")
     print(f"📋 Command: {' '.join(cmd)}")
+
+    start_time = time.time()
     try:
-        res = subprocess.run(
-            cmd, cwd=project_root, check=True, text=True, capture_output=True
-        )
-        print(f"✅ SadTalker completed successfully")
-        if res.stdout:
-            print(f"📄 SadTalker stdout:")
-            print(res.stdout)
-        if res.stderr:
-            print(f"⚠️ SadTalker stderr:")
-            print(res.stderr)
-    except subprocess.CalledProcessError as e:
-        print(f"❌ SadTalker command failed: {e}")
-        print(f"📄 Command: {' '.join(cmd)}")
-        print(f"📄 Working directory: {project_root}")
-        if e.stdout:
-            print(f"📄 stdout: {e.stdout}")
-        if e.stderr:
-            print(f"❌ stderr: {e.stderr}")
-        raise RuntimeError(f"SadTalker animation failed: {e}")
+        rc, combined_log = run_command_stream(cmd, cwd=project_root, print_prefix="🪄 SadTalker")
+        if rc == 0:
+            print(f"✅ SadTalker completed successfully")
+        else:
+            print(f"❌ SadTalker command exited with code {rc}. Attempting to locate generated video anyway...")
     except FileNotFoundError as e:
         print(f"❌ File not found error: {e}")
         print(f"📄 Command: {' '.join(cmd)}")
@@ -433,7 +442,7 @@ def sadtalker_animate(
         print(f"💡 Make sure Docker is running and 'docker compose' is available in PATH")
         raise RuntimeError(f"Docker command not found. Make sure Docker is installed and running: {e}")
 
-    log = (res.stdout or "") + "\n" + (res.stderr or "")
+    log = combined_log or ""
     pattern = r"The generated video is named[: ]+(\S+\.mp4)"
     matches = re.findall(pattern, log)
 
@@ -452,23 +461,40 @@ def sadtalker_animate(
                     generated_video_path = os.path.join(host_path, fn)
                     break
 
-    # Fallback search
+    # Fallback search: find any .mp4 created after we started SadTalker
     if not generated_video_path:
         host_results = os.path.join(project_root, "results")
-        subdirs = [
-            d
-            for d in os.listdir(host_results)
-            if os.path.isdir(os.path.join(host_results, d))
-        ]
-        if subdirs:
-            newest = max(
-                subdirs, key=lambda d: os.path.getctime(os.path.join(host_results, d))
-            )
-            result_dir = os.path.join(host_results, newest)
-            for fn in os.listdir(result_dir):
+        newest_path = None
+        newest_mtime = 0
+        for root, _, files in os.walk(host_results):
+            for fn in files:
                 if fn.endswith(".mp4"):
-                    generated_video_path = os.path.join(result_dir, fn)
-                    break
+                    fp = os.path.join(root, fn)
+                    try:
+                        mtime = os.path.getmtime(fp)
+                    except Exception:
+                        continue
+                    if mtime >= start_time - 5 and mtime > newest_mtime:
+                        newest_mtime = mtime
+                        newest_path = fp
+        if newest_path:
+            generated_video_path = newest_path
+        else:
+            # Legacy fallback: pick the newest result subdir and take first mp4
+            subdirs = [
+                d
+                for d in os.listdir(host_results)
+                if os.path.isdir(os.path.join(host_results, d))
+            ]
+            if subdirs:
+                newest = max(
+                    subdirs, key=lambda d: os.path.getctime(os.path.join(host_results, d))
+                )
+                result_dir = os.path.join(host_results, newest)
+                for fn in os.listdir(result_dir):
+                    if fn.endswith(".mp4"):
+                        generated_video_path = os.path.join(result_dir, fn)
+                        break
 
     if not generated_video_path:
         # Clean up temporary files before raising error
@@ -504,25 +530,18 @@ def sadtalker_animate(
 
     try:
         print(f"🎬 Converting video to web-compatible format...")
-        result = subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
-        print(f"✅ Video conversion complete")
-        if result.stdout:
-            print(f"📄 FFmpeg conversion stdout: {result.stdout}")
-        if result.stderr:
-            print(f"⚠️ FFmpeg conversion stderr: {result.stderr}")
-        # Clean up temporary files
-        shutil.rmtree(host_data_dir)
-        return output_path
-    except subprocess.CalledProcessError as e:
-        print(f"❌ FFmpeg conversion failed: {e}")
-        print(f"📄 Command: {' '.join(ffmpeg_cmd)}")
-        if e.stdout:
-            print(f"📄 stdout: {e.stdout}")
-        if e.stderr:
-            print(f"❌ stderr: {e.stderr}")
-        # If ffmpeg fails, return original file and clean up
-        shutil.rmtree(host_data_dir)
-        return generated_video_path
+        rc, _ = run_command_stream(ffmpeg_cmd, print_prefix="FFmpeg convert")
+        if rc == 0:
+            print(f"✅ Video conversion complete")
+            # Clean up temporary files
+            shutil.rmtree(host_data_dir)
+            return output_path
+        else:
+            print(f"❌ FFmpeg conversion exited with code {rc}")
+            print(f"📄 Command: {' '.join(ffmpeg_cmd)}")
+            # If ffmpeg fails, return original file and clean up
+            shutil.rmtree(host_data_dir)
+            return generated_video_path
     except FileNotFoundError as e:
         print(f"❌ FFmpeg not found: {e}")
         print(f"📄 Command: {' '.join(ffmpeg_cmd)}")
@@ -660,10 +679,10 @@ if __name__ == "__main__":
     with demo:
         state = gr.State([])
 
-    gr.Markdown("""
-    # AI Digital Twin V2
-    You can upload a voice sample, portrait image, and driving video — or leave any blank to use defaults from the local data/ folder.
-    """)
+        gr.Markdown("""
+        # AI Digital Twin V2
+        You can upload a voice sample, portrait image, and driving video — or leave any blank to use defaults from the local data/ folder.
+        """)
 
         with gr.Row():
             with gr.Column():
