@@ -660,18 +660,18 @@ if __name__ == "__main__":
     with demo:
         state = gr.State([])
 
-        gr.Markdown("""
-        # AI Digital Twin V2
-        Provide three files and optional text. Click Generate.
-        """)
+    gr.Markdown("""
+    # AI Digital Twin V2
+    You can upload a voice sample, portrait image, and driving video — or leave any blank to use defaults from the local data/ folder.
+    """)
 
         with gr.Row():
             with gr.Column():
                 text = gr.Textbox(label="Text (optional)", placeholder="Type text or leave blank to only clone voice from prompt + audio.", lines=3)
                 use_ai = gr.Checkbox(label="Ask AI JimTwin.", value=True)
-                voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
-                image = gr.Image(label="Portrait Image", type="filepath")
-                video = gr.Video(label="Driving Video", format="mp4")
+                voice = gr.Audio(label="Voice Sample (optional; defaults to data/trainingaudio.wav)", type="filepath")
+                image = gr.Image(label="Portrait Image (optional; defaults to data/screenshot.png)", type="filepath")
+                video = gr.Video(label="Driving Video (optional; defaults to data/source_video.mp4)", format="mp4")
                 generate = gr.Button("Generate")
                 clear = gr.Button("Clear")
             with gr.Column():
@@ -681,12 +681,28 @@ if __name__ == "__main__":
                 history_md = gr.Markdown("No generations yet.")
 
         def _validate_inputs(txt, v_path, img_path, vid_path):
-            if not v_path:
-                raise gr.Error("Voice sample is required.")
-            if not img_path:
-                raise gr.Error("Portrait image is required.")
-            if not vid_path:
-                raise gr.Error("Driving video is required.")
+            # Resolve defaults from data/ if any input is missing
+            project_root = os.path.abspath(os.path.dirname(__file__))
+            data_dir = os.path.join(project_root, "data")
+            default_voice = os.path.join(data_dir, "trainingaudio.wav")
+            default_image = os.path.join(data_dir, "screenshot.png")
+            default_video = os.path.join(data_dir, "source_video.mp4")
+
+            v_path = v_path or default_voice
+            img_path = img_path or default_image
+            vid_path = vid_path or default_video
+
+            # Validate existence of resolved paths
+            missing = []
+            if not (isinstance(v_path, str) and os.path.isfile(v_path)):
+                missing.append(f"voice sample at {v_path}")
+            if not (isinstance(img_path, str) and os.path.isfile(img_path)):
+                missing.append(f"portrait image at {img_path}")
+            if not (isinstance(vid_path, str) and os.path.isfile(vid_path)):
+                missing.append(f"driving video at {vid_path}")
+            if missing:
+                raise gr.Error("Missing required file(s): " + ", ".join(missing))
+
             # Coerce to expected objects mimicking gradio File-like for pipeline
             class _F:
                 def __init__(self, name: str):
