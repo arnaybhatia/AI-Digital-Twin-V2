@@ -665,6 +665,21 @@ if __name__ == "__main__":
         Provide three files and optional text. Click Generate.
         """)
 
+        # Discover local sample files in repo's data/ directory
+        project_root = os.path.abspath(os.path.dirname(__file__))
+        data_dir = os.path.join(project_root, "data")
+        voice_samples = [
+            fn
+            for fn in ["speaker.wav", "trainingaudio.wav"]
+            if os.path.exists(os.path.join(data_dir, fn))
+        ]
+        image_samples = [
+            fn for fn in ["screenshot.png"] if os.path.exists(os.path.join(data_dir, fn))
+        ]
+        video_samples = [
+            fn for fn in ["source_video.mp4"] if os.path.exists(os.path.join(data_dir, fn))
+        ]
+
         with gr.Row():
             with gr.Column():
                 text = gr.Textbox(label="Text (optional)", placeholder="Type text or leave blank to only clone voice from prompt + audio.", lines=3)
@@ -672,6 +687,22 @@ if __name__ == "__main__":
                 voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
                 image = gr.Image(label="Portrait Image", type="filepath")
                 video = gr.Video(label="Driving Video", format="mp4")
+                gr.Markdown("Select from repo samples (data/):")
+                voice_dd = gr.Dropdown(
+                    label="Sample voice",
+                    choices=(["(none)"] + voice_samples) if voice_samples else ["(none)"],
+                    value="(none)",
+                )
+                image_dd = gr.Dropdown(
+                    label="Sample image",
+                    choices=(["(none)"] + image_samples) if image_samples else ["(none)"],
+                    value="(none)",
+                )
+                video_dd = gr.Dropdown(
+                    label="Sample driving video",
+                    choices=(["(none)"] + video_samples) if video_samples else ["(none)"],
+                    value="(none)",
+                )
                 generate = gr.Button("Generate")
                 clear = gr.Button("Clear")
             with gr.Column():
@@ -712,6 +743,16 @@ if __name__ == "__main__":
             for h in history[-5:]:
                 lines.append(f"- {h['timestamp']} | {h['mode']} | {h['input'][:50]}{'...' if len(h['input'])>50 else ''}")
             return "\n".join(lines)
+
+        def _sample_to_path(choice: str):
+            if not choice or choice == "(none)":
+                return None
+            return os.path.join(data_dir, choice)
+
+        # Wire dropdown changes to populate the corresponding file inputs
+        voice_dd.change(fn=_sample_to_path, inputs=voice_dd, outputs=voice)
+        image_dd.change(fn=_sample_to_path, inputs=image_dd, outputs=image)
+        video_dd.change(fn=_sample_to_path, inputs=video_dd, outputs=video)
 
         clear.click(fn=_clear, outputs=[api_out, audio_out, video_out])
 
