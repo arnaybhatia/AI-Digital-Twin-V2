@@ -348,6 +348,7 @@ def sadtalker_animate(
         "docker",
         "compose",
         "exec",
+        "-T",  # Added -T flag to disable pseudo-TTY
         "sadtalker",
         "python",
         "-u",
@@ -364,6 +365,8 @@ def sadtalker_animate(
         "--verbose",
     ]
     print("[sadtalker] Running:", " ".join(cmd), flush=True)
+    
+    start_time = time.time()
     proc = subprocess.Popen(
         cmd,
         cwd=project_root,
@@ -381,7 +384,7 @@ def sadtalker_animate(
             st_log_lines.append(line)
     ret = proc.wait()
     if ret != 0:
-        raise RuntimeError(f"SadTalker failed with exit code {ret}. See logs above.")
+        print(f"[sadtalker] Warning: SadTalker exited with code {ret}. Attempting to locate video anyway...")
 
     log = "".join(st_log_lines)
     pattern = r"The generated video is named[: ]+(\S+\.mp4)"
@@ -402,23 +405,40 @@ def sadtalker_animate(
                     generated_video_path = os.path.join(host_path, fn)
                     break
 
-    # Fallback search
+    # Enhanced fallback search: find any .mp4 created after we started SadTalker
     if not generated_video_path:
         host_results = os.path.join(project_root, "results")
-        subdirs = [
-            d
-            for d in os.listdir(host_results)
-            if os.path.isdir(os.path.join(host_results, d))
-        ]
-        if subdirs:
-            newest = max(
-                subdirs, key=lambda d: os.path.getctime(os.path.join(host_results, d))
-            )
-            result_dir = os.path.join(host_results, newest)
-            for fn in os.listdir(result_dir):
+        newest_path = None
+        newest_mtime = 0
+        for root, _, files in os.walk(host_results):
+            for fn in files:
                 if fn.endswith(".mp4"):
-                    generated_video_path = os.path.join(result_dir, fn)
-                    break
+                    fp = os.path.join(root, fn)
+                    try:
+                        mtime = os.path.getmtime(fp)
+                    except Exception:
+                        continue
+                    if mtime >= start_time - 5 and mtime > newest_mtime:
+                        newest_mtime = mtime
+                        newest_path = fp
+        if newest_path:
+            generated_video_path = newest_path
+        else:
+            # Legacy fallback: pick the newest result subdir and take first mp4
+            subdirs = [
+                d
+                for d in os.listdir(host_results)
+                if os.path.isdir(os.path.join(host_results, d))
+            ]
+            if subdirs:
+                newest = max(
+                    subdirs, key=lambda d: os.path.getctime(os.path.join(host_results, d))
+                )
+                result_dir = os.path.join(host_results, newest)
+                for fn in os.listdir(result_dir):
+                    if fn.endswith(".mp4"):
+                        generated_video_path = os.path.join(result_dir, fn)
+                        break
 
     if not generated_video_path:
         # Clean up temporary files before raising error
@@ -428,10 +448,14 @@ def sadtalker_animate(
             pass
         raise RuntimeError("No .mp4 found in SadTalker results")
 
+    print(f"[sadtalker] Found generated video: {generated_video_path}")
+
     # Convert video to web-compatible format for Gradio
     results_dir = os.path.join(project_root, "results")
     os.makedirs(results_dir, exist_ok=True)
     output_path = os.path.join(results_dir, f"output_{run_id}.mp4")
+    
+    # More robust ffmpeg command with better codec settings
     ffmpeg_cmd = [
         "ffmpeg",
         "-y",
@@ -443,23 +467,67 @@ def sadtalker_animate(
         "fast",
         "-crf",
         "23",
+        "-pix_fmt",
+        "yuv420p",  # Added for better compatibility
         "-c:a",
         "aac",
         "-b:a",
         "128k",
         "-movflags",
         "+faststart",
+        "-max_muxing_queue_size",
+        "1024",  # Added to prevent muxing issues
         output_path,
     ]
 
     try:
-        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, encoding='utf-8', errors='replace')
-        # Clean up temporary files
-        shutil.rmtree(host_data_dir)
-        return output_path
-    except subprocess.CalledProcessError:
-        # If ffmpeg fails, return original file and clean up
-        shutil.rmtree(host_data_dir)
+        print(f"[ffmpeg] Converting video to web-compatible format...")
+        print(f"[ffmpeg] Command: {' '.join(ffmpeg_cmd)}")
+        
+        result = subprocess.run(
+            ffmpeg_cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+        
+        if result.returncode == 0:
+            print(f"[ffmpeg] ✅ Video conversion complete")
+            # Clean up temporary files
+            try:
+                shutil.rmtree(host_data_dir)
+            except:
+                pass
+            return output_path
+        else:
+            print(f"[ffmpeg] ❌ FFmpeg conversion failed with code {result.returncode}")
+            print(f"[ffmpeg] STDOUT: {result.stdout}")
+            print(f"[ffmpeg] STDERR: {result.stderr}")
+            print(f"[ffmpeg] Falling back to original video")
+            # Clean up temporary files and return original
+            try:
+                shutil.rmtree(host_data_dir)
+            except:
+                pass
+            return generated_video_path
+            
+    except FileNotFoundError:
+        print(f"[ffmpeg] ❌ FFmpeg not found in PATH")
+        print(f"[ffmpeg] Please install FFmpeg: sudo apt-get install ffmpeg")
+        # Clean up temporary files and return original
+        try:
+            shutil.rmtree(host_data_dir)
+        except:
+            pass
+        return generated_video_path
+    except Exception as e:
+        print(f"[ffmpeg] ❌ Unexpected error during conversion: {e}")
+        # Clean up temporary files and return original
+        try:
+            shutil.rmtree(host_data_dir)
+        except:
+            pass
         return generated_video_path
 
 
