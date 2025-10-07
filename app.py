@@ -53,8 +53,6 @@ def initialize_session():
     CLIENT_TOKEN = tok["client_token_id"]
     th = make_request("POST", "/threads", json={"client_token_id": CLIENT_TOKEN})
     THREAD_ID = th["id"]
-    
-    # System prompt initialization removed per request
 
 
 def get_response(user_input: str, language: str = "en-us") -> str:
@@ -108,15 +106,40 @@ def get_response(user_input: str, language: str = "en-us") -> str:
 
 
 # ——— Voice cloning ———
-def split_text_into_sentences(*args, **kwargs):  # legacy shim (no longer used)
-    return [args[0]] if args else []
+def split_text_into_sentences(text: str, max_tokens: int = 150) -> list:
+    """Split text into sentences with natural sentence boundaries and token limit fallback"""
+    import re
+
+    # Split by natural sentence endings: . ! ?
+    # Keep the punctuation with the sentence
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
+
+    # Clean up sentences and remove empty ones
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    # Further split long sentences by token limit
+    final_sentences = []
+    for sentence in sentences:
+        words = sentence.split()
+        if len(words) <= max_tokens:
+            if sentence.strip():  # Only add non-empty sentences
+                final_sentences.append(sentence)
+        else:
+            # Split long sentence into chunks
+            for i in range(0, len(words), max_tokens):
+                chunk = " ".join(words[i : i + max_tokens])
+                if chunk.strip():
+                    final_sentences.append(chunk)
+
+    # If no valid sentences found, return original text as single sentence
+    if not final_sentences:
+        final_sentences = [text.strip()]
+
+    return final_sentences
 
 
-def _exec_full_tts(text: str, source_wav: str, out_wav: str, language: str, model: str) -> str:
-    """Execute a single docker compose call to zonos_generate for entire text.
-
-    zonos_generate.py now handles internal sentence splitting & concatenation.
-    """
+def _exec_sentence_tts(text: str, source_wav: str, out_wav: str, language: str) -> str:
+    """Execute TTS for a single sentence via Zonos docker container."""
     project_root = os.path.abspath(os.path.dirname(__file__))
     host_data_dir = os.path.join(project_root, "data")
     os.makedirs(host_data_dir, exist_ok=True)
@@ -136,7 +159,7 @@ def _exec_full_tts(text: str, source_wav: str, out_wav: str, language: str, mode
         "--text", text,
         "--output", container_out_path,
         "--speaker_audio", container_prompt_path,
-        "--model", model,
+        "--model", "transformer",
         "--language", language,
     ]
     print("[zonos] Running:", " ".join(cmd), flush=True)
@@ -168,19 +191,138 @@ def _exec_full_tts(text: str, source_wav: str, out_wav: str, language: str, mode
                 pass
 
 
-def combine_audio_files(audio_files: list, output_path: str) -> str:  # legacy
-    if audio_files:
-        shutil.copy(audio_files[0], output_path)
-        return output_path
-    raise RuntimeError("No audio files provided")
+def combine_audio_files(audio_files: list, output_path: str) -> str:
+    """Combine multiple audio files using ffmpeg"""
+    import tempfile
+
+    # Create a temporary file list for ffmpeg
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        for audio_file in audio_files:
+            f.write(f"file '{os.path.abspath(audio_file)}'\n")
+        file_list_path = f.name
+
+    try:
+        # Use ffmpeg to concatenate audio files
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            file_list_path,
+            "-c",
+            "copy",
+            output_path,
+        ]
+        print(f"🔗 Combining {len(audio_files)} audio files...")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            return output_path
+        else:
+            raise RuntimeError(f"ffmpeg concat exited with code {result.returncode}")
+    except Exception as e:
+        print(f"❌ FFmpeg concat failed: {e}")
+        print(f"📄 Command: {' '.join(cmd)}")
+        # Fallback: use ffmpeg with filter_complex for better compatibility
+        try:
+            inputs = []
+            filter_parts = []
+
+            for i, audio_file in enumerate(audio_files):
+                inputs.extend(["-i", audio_file])
+                filter_parts.append(f"[{i}:0]")
+
+            filter_complex = (
+                "".join(filter_parts) + f"concat=n={len(audio_files)}:v=0:a=1[out]"
+            )
+
+            cmd = (
+                ["ffmpeg", "-y"]
+                + inputs
+                + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
+            )
+            print(f"🔗 Using filter_complex to combine audio files...")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                return output_path
+            else:
+                raise RuntimeError(f"ffmpeg filter_complex exited with code {result.returncode}")
+        except Exception as e:
+            print(f"❌ FFmpeg filter_complex failed: {e}")
+            print(f"📄 Command: {' '.join(cmd)}")
+            # If both methods fail, return the first audio file
+            if audio_files:
+                shutil.copy(audio_files[0], output_path)
+                return output_path
+            raise RuntimeError("Failed to combine audio files")
+    finally:
+        # Clean up temporary file list
+        try:
+            os.unlink(file_list_path)
+        except:
+            pass
 
 
-def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us", model: str = "transformer") -> str:
-    return _exec_full_tts(text, source_wav, out_wav, language, model)
+def clone_voice_docker(text: str, source_wav: str, out_wav: str, language: str = "en-us") -> str:
+    """Clone voice with sentence batching using dedicated temp directory"""
+    # Create dedicated temp directory for this operation
+    project_root = os.path.abspath(os.path.dirname(__file__))
+    temp_dir = os.path.join(project_root, "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Create unique subdirectory for this operation
+    operation_id = uuid.uuid4().hex[:8]
+    operation_temp_dir = os.path.join(temp_dir, f"voice_clone_{operation_id}")
+    os.makedirs(operation_temp_dir, exist_ok=True)
+
+    try:
+        # Split text into manageable sentences
+        sentences = split_text_into_sentences(text)
+
+        if len(sentences) == 1:
+            # Single sentence, process directly to output
+            return _exec_sentence_tts(text, source_wav, out_wav, language)
+
+        # Multiple sentences, batch process in temp directory
+        temp_audio_files = []
+        print(f"🎤 Processing {len(sentences)} sentences for voice cloning...")
+
+        for i, sentence in enumerate(sentences):
+            if not sentence.strip():
+                continue
+
+            print(f"🎤 Processing sentence {i+1}/{len(sentences)}")
+            temp_audio_path = os.path.join(operation_temp_dir, f"sentence_{i:03d}.wav")
+            _exec_sentence_tts(sentence.strip(), source_wav, temp_audio_path, language)
+            temp_audio_files.append(temp_audio_path)
+
+        if not temp_audio_files:
+            raise RuntimeError("No valid sentences to process")
+
+        if len(temp_audio_files) == 1:
+            # Only one valid sentence, move directly to output
+            shutil.move(temp_audio_files[0], out_wav)
+        else:
+            # Combine multiple audio files
+            combine_audio_files(temp_audio_files, out_wav)
+
+        return out_wav
+
+    finally:
+        # Clean up the entire operation temp directory
+        try:
+            if os.path.exists(operation_temp_dir):
+                shutil.rmtree(operation_temp_dir)
+        except Exception as e:
+            print(
+                f"Warning: Failed to clean up temp directory {operation_temp_dir}: {e}"
+            )
 
 
-def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us", model: str = "transformer") -> str:
-    return clone_voice_docker(text, src_wav, out_wav, language, model)
+def clone_voice(text: str, src_wav: str, out_wav: str, language: str = "en-us") -> str:
+    return clone_voice_docker(text, src_wav, out_wav, language)
 
 
 # ——— SadTalker animation ———
@@ -329,7 +471,6 @@ def pipeline(
     video_file,
     use_ai: bool,
     language: str,
-    tts_model: str,
     history: list,
     progress=gr.Progress(),
 ):
@@ -385,7 +526,7 @@ def pipeline(
 
         # Clone voice to temp, then persist to results so it remains accessible
         cloned_wav_tmp = os.path.join(workdir, f"{uid}_clone.wav")
-        clone_voice(assistant_text, src_wav, cloned_wav_tmp, language, tts_model)
+        clone_voice(assistant_text, src_wav, cloned_wav_tmp, language)
 
         # Persist audio in results directory for playback and history
         project_root = os.path.abspath(os.path.dirname(__file__))
@@ -448,7 +589,7 @@ if __name__ == "__main__":
 
         gr.Markdown("""
         # AI Digital Twin V2
-        Provide three files and optional text. Click Generate.
+        You can upload a voice sample, portrait image, and driving video — or leave any blank to use defaults from the local data/ folder.
         """)
 
         with gr.Row():
@@ -467,16 +608,9 @@ if __name__ == "__main__":
                     ],
                     value="en-us"
                 )
-                tts_model = gr.Dropdown(
-                    label="TTS Model",
-                    choices=[
-                        ("Transformer", "transformer"),
-                    ],
-                    value="transformer"
-                )
-                voice = gr.Audio(label="Voice Sample (wav/mp3)", type="filepath")
-                image = gr.Image(label="Portrait Image", type="filepath")
-                video = gr.Video(label="Driving Video", format="mp4")
+                voice = gr.Audio(label="Voice Sample (optional; defaults to data/trainingaudio.wav)", type="filepath")
+                image = gr.Image(label="Portrait Image (optional; defaults to data/screenshot.png)", type="filepath")
+                video = gr.Video(label="Driving Video (optional; defaults to data/source_video.mp4)", format="mp4")
                 generate = gr.Button("Generate")
                 clear = gr.Button("Clear")
             with gr.Column():
@@ -486,12 +620,28 @@ if __name__ == "__main__":
                 history_md = gr.Markdown("No generations yet.")
 
         def _validate_inputs(txt, v_path, img_path, vid_path):
-            if not v_path:
-                raise gr.Error("Voice sample is required.")
-            if not img_path:
-                raise gr.Error("Portrait image is required.")
-            if not vid_path:
-                raise gr.Error("Driving video is required.")
+            # Resolve defaults from data/ if any input is missing
+            project_root = os.path.abspath(os.path.dirname(__file__))
+            data_dir = os.path.join(project_root, "data")
+            default_voice = os.path.join(data_dir, "trainingaudio.wav")
+            default_image = os.path.join(data_dir, "screenshot.png")
+            default_video = os.path.join(data_dir, "source_video.mp4")
+
+            v_path = v_path or default_voice
+            img_path = img_path or default_image
+            vid_path = vid_path or default_video
+
+            # Validate existence of resolved paths
+            missing = []
+            if not (isinstance(v_path, str) and os.path.isfile(v_path)):
+                missing.append(f"voice sample at {v_path}")
+            if not (isinstance(img_path, str) and os.path.isfile(img_path)):
+                missing.append(f"portrait image at {img_path}")
+            if not (isinstance(vid_path, str) and os.path.isfile(vid_path)):
+                missing.append(f"driving video at {vid_path}")
+            if missing:
+                raise gr.Error("Missing required file(s): " + ", ".join(missing))
+
             # Coerce to expected objects mimicking gradio File-like for pipeline
             class _F:
                 def __init__(self, name: str):
@@ -501,10 +651,10 @@ if __name__ == "__main__":
             f3 = _F(vid_path)
             return txt or "", f1, f2, f3
 
-        def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, model, hist, progress=gr.Progress()):
+        def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, hist, progress=gr.Progress()):
             # Stream steps using existing pipeline generator
             txt, vf, imf, vif = _validate_inputs(txt, v_path, img_path, vid_path)
-            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, model, hist, progress):
+            for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, hist, progress):
                 yield api_resp, a_out, v_out, hist_out
 
         def _clear():
@@ -522,7 +672,7 @@ if __name__ == "__main__":
 
         generate.click(
             fn=_run,
-            inputs=[text, voice, image, video, use_ai, language, tts_model, state],
+            inputs=[text, voice, image, video, use_ai, language, state],
             outputs=[api_out, audio_out, video_out, state],
         ).then(fn=_refresh, inputs=[state], outputs=[history_md])
 
