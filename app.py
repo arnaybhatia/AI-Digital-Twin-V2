@@ -453,12 +453,19 @@ def sadtalker_animate(
     # Convert video to web-compatible format for Gradio
     results_dir = os.path.join(project_root, "results")
     os.makedirs(results_dir, exist_ok=True)
+
+    # Ensure the results directory is writable
+    try:
+        os.chmod(results_dir, 0o777)
+    except Exception as e:
+        print(f"[permissions] ⚠️ Could not change permissions on results folder: {e}")
+
     output_path = os.path.join(results_dir, f"output_{run_id}.mp4")
-    
-    # More robust ffmpeg command with better codec settings
+
+    # More robust ffmpeg command with better codec settings & output overwrite safety
     ffmpeg_cmd = [
         "ffmpeg",
-        "-y",
+        "-y",  # overwrite existing output
         "-i",
         generated_video_path,
         "-c:v",
@@ -468,7 +475,7 @@ def sadtalker_animate(
         "-crf",
         "23",
         "-pix_fmt",
-        "yuv420p",  # Added for better compatibility
+        "yuv420p",
         "-c:a",
         "aac",
         "-b:a",
@@ -476,58 +483,58 @@ def sadtalker_animate(
         "-movflags",
         "+faststart",
         "-max_muxing_queue_size",
-        "1024",  # Added to prevent muxing issues
+        "1024",
         output_path,
     ]
 
     try:
         print(f"[ffmpeg] Converting video to web-compatible format...")
-        print(f"[ffmpeg] Command: {' '.join(ffmpeg_cmd)}")
-        
         result = subprocess.run(
             ffmpeg_cmd,
             capture_output=True,
             text=True,
-            encoding='utf-8',
-            errors='replace'
+            encoding="utf-8",
+            errors="replace",
         )
-        
+
+        # Handle permission failures gracefully
+        if "Permission denied" in result.stderr or result.returncode == 243:
+            print(f"[ffmpeg] ⚠️ Permission denied. Retrying with a safe tmpfile...")
+            tmp_out = os.path.join(tempfile.gettempdir(), f"temp_{run_id}.mp4")
+            try:
+                rc2 = subprocess.run(
+                    ffmpeg_cmd[:-1] + [tmp_out],
+                    capture_output=True,
+                    text=True,
+                ).returncode
+                if rc2 == 0:
+                    shutil.move(tmp_out, output_path)
+                    print("[ffmpeg] ✅ Video conversion complete after retry.")
+                    shutil.rmtree(host_data_dir, ignore_errors=True)
+                    return output_path
+                else:
+                    print(f"[ffmpeg] ❌ Retry conversion failed: {rc2}")
+            except Exception as e:
+                print(f"[ffmpeg] ❌ Retry caught exception: {e}")
+
         if result.returncode == 0:
             print(f"[ffmpeg] ✅ Video conversion complete")
-            # Clean up temporary files
-            try:
-                shutil.rmtree(host_data_dir)
-            except:
-                pass
+            shutil.rmtree(host_data_dir, ignore_errors=True)
             return output_path
         else:
             print(f"[ffmpeg] ❌ FFmpeg conversion failed with code {result.returncode}")
-            print(f"[ffmpeg] STDOUT: {result.stdout}")
             print(f"[ffmpeg] STDERR: {result.stderr}")
-            print(f"[ffmpeg] Falling back to original video")
-            # Clean up temporary files and return original
-            try:
-                shutil.rmtree(host_data_dir)
-            except:
-                pass
+            print(f"[ffmpeg] Using original video fallback.")
+            shutil.rmtree(host_data_dir, ignore_errors=True)
             return generated_video_path
-            
+
     except FileNotFoundError:
-        print(f"[ffmpeg] ❌ FFmpeg not found in PATH")
-        print(f"[ffmpeg] Please install FFmpeg: sudo apt-get install ffmpeg")
-        # Clean up temporary files and return original
-        try:
-            shutil.rmtree(host_data_dir)
-        except:
-            pass
+        print(f"[ffmpeg] ❌ FFmpeg not found in PATH. Install with 'sudo apt install ffmpeg'.")
+        shutil.rmtree(host_data_dir, ignore_errors=True)
         return generated_video_path
     except Exception as e:
-        print(f"[ffmpeg] ❌ Unexpected error during conversion: {e}")
-        # Clean up temporary files and return original
-        try:
-            shutil.rmtree(host_data_dir)
-        except:
-            pass
+        print(f"[ffmpeg] ❌ Unexpected ffmpeg error: {e}")
+        shutil.rmtree(host_data_dir, ignore_errors=True)
         return generated_video_path
 
 
@@ -720,6 +727,12 @@ if __name__ == "__main__":
             return txt or "", f1, f2, f3
 
         def _run(txt, v_path, img_path, vid_path, use_ai_flag, lang, hist, progress=gr.Progress()):
+            # Input validation for non-AI mode
+            if not use_ai_flag:
+                word_count = len(str(txt).strip().split())
+                if word_count < 2:
+                    raise gr.Error("When 'Ask AI JimTwin' is unchecked, please enter at least two words.")
+
             # Stream steps using existing pipeline generator
             txt, vf, imf, vif = _validate_inputs(txt, v_path, img_path, vid_path)
             for api_resp, a_out, v_out, hist_out in pipeline(txt, vf, imf, vif, use_ai_flag, lang, hist, progress):
