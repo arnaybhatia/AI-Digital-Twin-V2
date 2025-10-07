@@ -33,7 +33,7 @@ RUN python -m venv /app/venv
 RUN /app/venv/bin/python -m pip install --upgrade pip
 
 # Install Chatterbox TTS
-RUN /app/venv/bin/pip install chatterbox-tts
+RUN /app/venv/bin/pip install chatterbox-tts==0.1.2
 
 # Install additional dependencies for API server
 RUN /app/venv/bin/pip install flask requests
