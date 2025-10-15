@@ -202,7 +202,8 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
         file_list_path = f.name
 
     try:
-        # Use ffmpeg to concatenate audio files
+        # Use ffmpeg to concatenate audio files with re-encoding for consistency
+        # Re-encoding prevents audio corruption in longer concatenated files
         cmd = [
             "ffmpeg",
             "-y",
@@ -212,8 +213,12 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             "0",
             "-i",
             file_list_path,
-            "-c",
-            "copy",
+            "-ar",
+            "44100",  # Resample to 44.1kHz for consistency
+            "-ac",
+            "2",  # Stereo output
+            "-c:a",
+            "pcm_s16le",  # Re-encode to PCM 16-bit for WAV compatibility
             output_path,
         ]
         print(f"🔗 Combining {len(audio_files)} audio files...")
@@ -241,7 +246,14 @@ def combine_audio_files(audio_files: list, output_path: str) -> str:
             cmd = (
                 ["ffmpeg", "-y"]
                 + inputs
-                + ["-filter_complex", filter_complex, "-map", "[out]", output_path]
+                + [
+                    "-filter_complex", filter_complex,
+                    "-map", "[out]",
+                    "-ar", "44100",  # Resample to 44.1kHz
+                    "-ac", "2",  # Stereo output
+                    "-c:a", "pcm_s16le",  # Re-encode to PCM 16-bit
+                    output_path
+                ]
             )
             print(f"🔗 Using filter_complex to combine audio files...")
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -479,7 +491,11 @@ def sadtalker_animate(
         "-c:a",
         "aac",
         "-b:a",
-        "128k",
+        "192k",  # Increased bitrate for better audio quality
+        "-ar",
+        "44100",  # Normalize sample rate to 44.1kHz
+        "-ac",
+        "2",  # Stereo audio
         "-movflags",
         "+faststart",
         "-max_muxing_queue_size",
