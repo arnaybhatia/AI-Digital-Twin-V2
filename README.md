@@ -1,3 +1,5 @@
+
+
 # AI Digital Twin V2
 
 Create personalized talking avatars with AI-powered voice cloning and facial animation. This project combines multiple AI technologies to generate realistic talking avatars from a single portrait image, voice sample, and text input.
@@ -59,10 +61,11 @@ docker compose up -d --build
 
 ## Usage
 
-1. **Upload your media files:**
+1. **Upload your media files (optional):**
    - Voice sample (audio file to clone)
    - Portrait image (still image to animate)
    - Driving video (for motion reference)
+   - *Note: If you leave any field blank, the application will automatically use the default sample files located in the `data/` directory (`trainingaudio.wav`, `screenshot.png`, `source_video.mp4`).*
 
 2. **Enter your text:**
    - Toggle "Ask AI JimTwin" ON for AI-generated responses
